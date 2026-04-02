@@ -1,0 +1,610 @@
+<!DOCTYPE html>
+<html lang="en" class="bg-root">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Fistbump</title>
+<link rel="stylesheet" href="css/fistbump.css">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body class="initial-hidden">
+<div id="setup-screen" class="login-screen hidden">
+  <header class="login-titlebar">
+    <div class="titlebar-controls">
+      <div class="tb-btn tb-minimize" onclick="fistbump.minimize()" title="Minimize"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><path d="M2 6h8"/></svg></div>
+      <div class="tb-btn tb-maximize" onclick="fistbump.maximize()" title="Maximize"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="2" y="2" width="8" height="8" rx="1"/></svg></div>
+      <div class="tb-btn tb-close" onclick="fistbump.close()" title="Close"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><path d="M2 2l8 8M10 2l-8 8"/></svg></div>
+    </div>
+  </header>
+  <div class="login-card fb-list">
+    <div class="login-brand"><svg class="login-logo" viewBox="-100 -100 1224 1224" xmlns="http://www.w3.org/2000/svg"><rect x="-100" y="-100" width="1224" height="1224" rx="220" fill="white"/><g transform="matrix(1.69935,0,0,1.69935,-337.675,-337.675)"><path d="M362,664.616L391.107,575.58L589.761,575.58L597.951,550.384L717.331,550.384L680.011,664.616L362,664.616ZM668.125,335.384L788.125,335.384L721.215,540.384L601.216,540.384L668.125,335.384ZM460.556,565.384L535.625,335.384L655.625,335.384L580.573,565.384L460.556,565.384ZM328.056,565.384L403.125,335.384L523.125,335.384L448.057,565.384L328.056,565.384ZM270.625,335.384L390.625,335.384L331.876,515.384L211.875,515.384L270.625,335.384Z" fill="black" fill-rule="nonzero"/></g></svg>Fistbump</div>
+    <div id="setup-step-1" class="setup-step fb-list">
+      <p class="setup-text">Fistbump lets you own and resolve names on the blockchain. To browse Fistbump names directly in your browser, we need to set up two things:</p>
+      <div class="setup-items">
+        <div class="setup-item">
+          <div class="setup-check" id="setup-check-ca"></div>
+          <div>
+            <div class="setup-item-title">Root Certificate</div>
+            <div class="setup-item-desc">A local certificate authority so your browser trusts Fistbump names over HTTPS. This is stored on your machine and never leaves it.</div>
+          </div>
+        </div>
+        <div class="setup-item">
+          <div class="setup-check" id="setup-check-pac"></div>
+          <div>
+            <div class="setup-item-title">Name Resolver</div>
+            <div class="setup-item-desc">A proxy configuration that tells your browser how to find Fistbump names. Names that aren't registered with traditional DNS authorities are resolved through your local node.</div>
+          </div>
+        </div>
+      </div>
+      <div id="setup-status" class="setup-status"></div>
+      <div class="login-actions">
+        <div class="btn primary" id="btn-setup-install">Set Up Resolving</div>
+        <div class="btn" id="btn-setup-skip">Skip for Now</div>
+      </div>
+    </div>
+  </div>
+</div>
+<div id="login-screen" class="login-screen hidden">
+  <header class="login-titlebar">
+    <div class="titlebar-controls">
+      <div class="tb-btn tb-minimize" onclick="fistbump.minimize()" title="Minimize"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><path d="M2 6h8"/></svg></div>
+      <div class="tb-btn tb-maximize" onclick="fistbump.maximize()" title="Maximize"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="2" y="2" width="8" height="8" rx="1"/></svg></div>
+      <div class="tb-btn tb-close" onclick="fistbump.close()" title="Close"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><path d="M2 2l8 8M10 2l-8 8"/></svg></div>
+    </div>
+  </header>
+  <div class="login-card fb-list">
+    <div class="login-brand"><svg class="login-logo" viewBox="-100 -100 1224 1224" xmlns="http://www.w3.org/2000/svg"><rect x="-100" y="-100" width="1224" height="1224" rx="220" fill="white"/><g transform="matrix(1.69935,0,0,1.69935,-337.675,-337.675)"><path d="M362,664.616L391.107,575.58L589.761,575.58L597.951,550.384L717.331,550.384L680.011,664.616L362,664.616ZM668.125,335.384L788.125,335.384L721.215,540.384L601.216,540.384L668.125,335.384ZM460.556,565.384L535.625,335.384L655.625,335.384L580.573,565.384L460.556,565.384ZM328.056,565.384L403.125,335.384L523.125,335.384L448.057,565.384L328.056,565.384ZM270.625,335.384L390.625,335.384L331.876,515.384L211.875,515.384L270.625,335.384Z" fill="black" fill-rule="nonzero"/></g></svg>Fistbump</div>
+    <div class="login-pages">
+      <div id="login-page-main" class="login-page">
+        <div id="login-status" class="login-status">Connecting to node...</div>
+        <div id="wallet-list" class="wallet-list"></div>
+        <div id="login-actions" class="login-actions">
+          <div class="btn primary" id="btn-create-wallet">Create Wallet</div>
+          <div class="btn" id="btn-import-wallet">Import Wallet</div>
+          <div class="btn" id="btn-create-multisig">Multisig Wallet</div>
+        </div>
+      </div>
+      <div id="login-page-create" class="login-page hidden fb-list">
+        <div class="fb-list">
+          <div class="fb-row">
+            <label>Name</label>
+            <input type="text" id="new-wallet-name" placeholder="Wallet name" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+          </div>
+        </div>
+        <div id="import-field" class="hidden mnemonic-section">
+          <div class="section-label">Recovery Phrase</div>
+          <div class="mnemonic-words" id="import-grid"></div>
+          <div class="btn mobile-only" id="btn-scan-qr">Scan QR Code</div>
+        </div>
+        <div id="login-form-status"></div>
+        <div class="confirm-actions">
+          <div class="btn" id="btn-login-back">Back</div>
+          <div class="btn primary" id="btn-login-submit">Create</div>
+        </div>
+      </div>
+      <div id="login-page-multisig" class="login-page hidden fb-list">
+        <div class="fb-list">
+          <div class="fb-row">
+            <label>Name</label>
+            <input type="text" id="ms-wallet-name" placeholder="Wallet name" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+          </div>
+          <div class="fb-row">
+            <label>Required Signatures (M)</label>
+            <input type="number" id="ms-m" placeholder="2" min="1" max="15" autocomplete="off">
+          </div>
+        </div>
+        <div class="fb-list">
+          <div class="fb-row">
+            <label>Key Source</label>
+            <select id="ms-key-source">
+              <option value="new">Generate new key</option>
+            </select>
+          </div>
+        </div>
+        <div class="section-label">Cosigner Extended Public Keys</div>
+        <div id="ms-xpubs">
+          <textarea class="ms-xpub-input" placeholder="Cosigner 1 xpub..." autocomplete="off" autocorrect="off" spellcheck="false"></textarea>
+        </div>
+        <div class="btn self-start" id="btn-ms-add-xpub">+ Add Cosigner</div>
+        <div id="ms-form-status"></div>
+        <div class="confirm-actions">
+          <div class="btn" id="btn-ms-back">Back</div>
+          <div class="btn primary" id="btn-ms-submit">Create</div>
+        </div>
+      </div>
+      <div id="login-page-mnemonic" class="login-page hidden fb-list">
+        <div class="mnemonic-section">
+          <div class="section-label">Recovery Phrase</div>
+          <div class="mnemonic-words" id="mnemonic-words"></div>
+          <input type="hidden" id="mnemonic-raw" value="">
+          <div class="mnemonic-actions">
+            <div class="btn" id="btn-copy-mnemonic">Copy to Clipboard</div>
+          </div>
+        </div>
+        <div class="mnemonic-warning">Write these words down and store them safely. This is the only way to recover your wallet.</div>
+        <div class="btn primary" id="btn-mnemonic-done">I've Saved My Phrase</div>
+      </div>
+    </div>
+  </div>
+</div>
+<div id="app" class="app hidden">
+  <header class="titlebar">
+    <div class="titlebar-brand">
+      <svg class="titlebar-logo" viewBox="-100 -100 1224 1224" xmlns="http://www.w3.org/2000/svg"><rect x="-100" y="-100" width="1224" height="1224" rx="220" fill="white"/><g transform="matrix(1.69935,0,0,1.69935,-337.675,-337.675)"><path d="M362,664.616L391.107,575.58L589.761,575.58L597.951,550.384L717.331,550.384L680.011,664.616L362,664.616ZM668.125,335.384L788.125,335.384L721.215,540.384L601.216,540.384L668.125,335.384ZM460.556,565.384L535.625,335.384L655.625,335.384L580.573,565.384L460.556,565.384ZM328.056,565.384L403.125,335.384L523.125,335.384L448.057,565.384L328.056,565.384ZM270.625,335.384L390.625,335.384L331.876,515.384L211.875,515.384L270.625,335.384Z" fill="black" fill-rule="nonzero"/></g></svg>
+      Fistbump
+    </div>
+    <div class="titlebar-sep"></div>
+    <div class="titlebar-status">
+      <div class="status-dot connecting" id="status-dot"></div>
+      <span id="sync-status">Connecting...</span>
+    </div>
+    <div class="hamburger-btn" id="hamburger-btn">
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M3 5h14M3 10h14M3 15h14"/></svg>
+    </div>
+    <div class="titlebar-search">
+      <div class="search-lock hidden" id="search-lock"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2.5" y="5.5" width="7" height="5" rx="1"/><path d="M4 5.5V4a2 2 0 1 1 4 0v1.5"/></svg></div>
+      <input type="text" id="global-name-search" placeholder="Search name..." autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" enterkeyhint="go">
+      <div class="search-clear hidden" id="search-clear">&times;</div>
+    </div>
+    <div class="titlebar-controls">
+      <div class="tb-btn tb-minimize" onclick="fistbump.minimize()" title="Minimize">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><path d="M2 6h8"/></svg>
+      </div>
+      <div class="tb-btn tb-maximize" onclick="fistbump.maximize()" title="Maximize">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="2" y="2" width="8" height="8" rx="1"/></svg>
+      </div>
+      <div class="tb-btn tb-close" onclick="fistbump.close()" title="Close">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><path d="M2 2l8 8M10 2l-8 8"/></svg>
+      </div>
+    </div>
+  </header>
+  <div class="app-body">
+    <div class="sidebar-backdrop" id="sidebar-backdrop"></div>
+    <aside class="sidebar">
+      <nav>
+        <div class="nav-item active" data-tab="overview">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="6.5"/><path d="M8 4.5v7M5.5 8h5"/></svg>
+          Overview
+        </div>
+        <div class="nav-item" data-tab="names">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 2h10v12H3zM6 5h4M6 8h4M6 11h2"/></svg>
+          Names
+        </div>
+        <div class="nav-item" data-tab="auctions">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 3h12v2H2zM4 7h8v2H4zM3 11h10v2H3z"/></svg>
+          Auctions
+        </div>
+        <div class="nav-item" data-tab="transactions">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4l4-2v12l-4-2zM10 4l4 2v8l-4 2z"/></svg>
+          Transactions
+        </div>
+        <div class="nav-item" data-tab="wallet">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="4" width="12" height="9" rx="1.5"/><path d="M4 4V3a1.5 1.5 0 0 1 1.5-1.5h5A1.5 1.5 0 0 1 12 3v1"/><circle cx="10.5" cy="8.5" r="1"/></svg>
+          Wallet
+        </div>
+        <div class="nav-item" data-tab="log">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4h12M2 8h8M2 12h10"/></svg>
+          Log
+        </div>
+        <div class="nav-item" data-tab="console">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4l4 4-4 4M8 12h6"/></svg>
+          Console
+        </div>
+        <div class="nav-item hidden" data-tab="browse" id="nav-browse">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="6.5"/><path d="M1.5 8h13M8 1.5c-2 2-3 4-3 6.5s1 4.5 3 6.5M8 1.5c2 2 3 4 3 6.5s-1 4.5-3 6.5"/></svg>
+          Browse
+        </div>
+        <div class="nav-item" data-tab="settings">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="2.5"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.1 3.1l1.4 1.4M11.5 11.5l1.4 1.4M3.1 12.9l1.4-1.4M11.5 4.5l1.4-1.4"/></svg>
+          Settings
+        </div>
+        <div class="nav-sep"></div>
+        <div class="nav-item" id="btn-logout">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 2H4a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2M10 11l3-3-3-3M13 8H6"/></svg>
+          <span id="sidebar-wallet-name">Logout</span>
+        </div>
+        <div class="nav-spacer"></div>
+        <div class="mining-toggle" id="mining-toggle">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 2v2M8 12v2M2 8h2M12 8h2M4.2 4.2l1.4 1.4M10.4 10.4l1.4 1.4M4.2 11.8l1.4-1.4M10.4 5.6l1.4-1.4"/><circle cx="8" cy="8" r="2"/></svg>
+          <span class="mining-label">Mining</span>
+          <label class="switch">
+            <input type="checkbox" id="mining-switch">
+            <span class="switch-slider"></span>
+          </label>
+        </div>
+      </nav>
+    </aside>
+    <main>
+      <section id="tab-overview" class="page active">
+        <h2 class="page-title">Overview</h2>
+        <div class="balance-card">
+          <div class="balance-label">Spendable Balance</div>
+          <div class="balance-amount" id="balance">0.00 </div>
+          <div class="balance-details" id="balance-details"></div>
+          <div class="balance-actions">
+            <div class="btn primary" id="btn-show-send">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 12V4M5 7l3-3 3 3"/></svg>
+              Send
+            </div>
+            <div class="btn" id="btn-show-receive">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 4v8M5 9l3 3 3-3"/></svg>
+              Receive
+            </div>
+            <div class="btn hidden" id="btn-show-cosign">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 4L6 10M6 10l-2.5.5.5-2.5L10 2l2 2zM12 10v2a1 1 0 01-1 1H4a1 1 0 01-1-1V5a1 1 0 011-1h2"/></svg>
+              Cosign
+            </div>
+          </div>
+        </div>
+        <div id="overview-actions" class="hidden"></div>
+        <div class="section-card">
+          <div class="section-label">Recent Activity</div>
+          <div id="tx-list" class="empty-state">No transactions yet</div>
+        </div>
+      </section>
+      <section id="tab-names" class="page">
+        <h2 class="page-title">Names</h2>
+        <div id="my-names" class="empty-state">Loading...</div>
+      </section>
+      <section id="tab-auctions" class="page">
+        <h2 class="page-title">Auctions</h2>
+        <div class="filter-bar" id="auction-filters">
+          <div class="filter-btn active" data-filter="all">All Active</div>
+          <div class="filter-btn" data-filter="OPENING">Opening</div>
+          <div class="filter-btn" data-filter="BIDDING">Bidding</div>
+          <div class="filter-btn" data-filter="REVEAL">Reveal</div>
+          <div class="filter-btn" data-filter="CLOSED">Closed</div>
+        </div>
+        <div class="names-stats" id="auction-stats"></div>
+        <div id="bid-list" class="empty-state">No bids placed</div>
+      </section>
+      <section id="tab-transactions" class="page">
+        <h2 class="page-title">Transactions</h2>
+        <div id="all-tx-list" class="empty-state">Loading...</div>
+        <div id="tx-load-more" class="hidden tx-load-more">
+          <div class="btn" id="btn-tx-load-more">Load More</div>
+        </div>
+      </section>
+      <section id="tab-log" class="page">
+        <h2 class="page-title">Log</h2>
+        <div class="log-container" id="log-container">
+          <pre id="log-output" class="log-output"></pre>
+        </div>
+      </section>
+      <section id="tab-wallet" class="page">
+        <h2 class="page-title">Wallet</h2>
+        <div class="section-card">
+          <div class="section-label">Info</div>
+          <div class="fb-list">
+            <div class="fb-row"><label>Name</label><span id="wallet-info-name">--</span></div>
+            <div class="fb-row"><label>Type</label><span id="wallet-info-type">--</span></div>
+            <div class="fb-row"><label>Address</label><span id="wallet-info-address" class="mono-sm">--</span></div>
+            <div class="fb-row"><label>Scan Height</label><span id="wallet-info-scan">--</span></div>
+            <div class="fb-row" id="wallet-encryption-row"><label>Encryption</label><span id="wallet-info-encryption">--</span></div>
+          </div>
+        </div>
+        <div class="section-card" id="wallet-security-card">
+          <div class="section-label">Security</div>
+          <div id="wallet-security-actions">
+            <div class="btn" id="btn-encrypt-wallet">Encrypt Wallet</div>
+            <div class="btn hidden" id="btn-lock-wallet">Lock Wallet</div>
+            <div class="btn hidden" id="btn-enable-biometric">Enable Biometric Unlock</div>
+            <div class="btn hidden" id="btn-disable-biometric">Disable Biometric Unlock</div>
+          </div>
+          <div id="encrypt-status"></div>
+        </div>
+        <div class="section-card">
+          <div class="section-label">Actions</div>
+          <div class="btn" id="btn-show-recovery-qr">Show Recovery QR</div>
+          <div class="btn" id="btn-rescan">Rescan Wallet</div>
+          <div id="rescan-status"></div>
+        </div>
+        <div class="section-card">
+          <div class="section-label">Danger Zone</div>
+          <div class="btn danger" id="btn-delete-wallet">Delete Wallet</div>
+        </div>
+      </section>
+      <section id="tab-settings" class="page">
+        <h2 class="page-title">Settings</h2>
+        <div class="section-card" id="settings-resolving">
+          <div class="section-label">Name Resolving</div>
+          <div class="fb-list">
+            <div class="fb-row"><label>Enable Proxy</label><label class="switch"><input type="checkbox" id="setting-proxy-toggle"><span class="switch-slider"></span></label></div>
+            <div class="fb-row"><label>Proxy</label><span id="settings-pac-status"><span class="dot"></span>Checking...</span></div>
+            <div class="fb-row"><label>Root Certificate</label><span id="settings-ca-status"><span class="dot"></span>Checking...</span></div>
+            <div class="fb-row"><label>Certificate Expires</label><span id="settings-ca-expires">--</span></div>
+          </div>
+          <div class="mt-8">
+            <div class="btn" id="btn-settings-renew-ca">Renew Certificate</div>
+          </div>
+          <div id="settings-proxy-status" class="proxy-status mt-8"></div>
+        </div>
+        <div class="section-card">
+          <div class="section-label">Appearance</div>
+          <div class="fb-list">
+            <div class="fb-row">
+              <label>Theme</label>
+              <select id="setting-theme">
+                <option value="system">System</option>
+                <option value="dark">Dark</option>
+                <option value="light">Light</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        <div class="section-card">
+          <div class="section-label">Log Level</div>
+          <div class="fb-list">
+            <div class="fb-row">
+              <label>Show</label>
+              <select id="setting-loglevel">
+                <option value="D">Debug (all)</option>
+                <option value="I" selected>Info</option>
+                <option value="W">Warning</option>
+                <option value="E">Error</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        <div class="section-card">
+          <div class="section-label">Mining</div>
+          <div class="fb-list">
+            <div class="fb-row">
+              <label>Enabled</label>
+              <label class="switch">
+                <input type="checkbox" id="setting-mining-switch">
+                <span class="switch-slider"></span>
+              </label>
+            </div>
+            <div class="fb-row">
+              <label>Address</label>
+              <input type="text" id="setting-miner-address" placeholder="Address to receive mining rewards" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+            </div>
+            <div class="fb-row">
+              <label>Threads</label>
+              <div class="threads-slider">
+                <input type="range" id="setting-miner-threads" min="1" max="1" value="1" class="w-full">
+                <span class="muted text-sm text-center" id="miner-thread-label"></span>
+              </div>
+            </div>
+          </div>
+          <div class="miner-controls">
+            <div class="btn" id="btn-save-miner">Save</div>
+            <span id="miner-status" class="miner-status"></span>
+          </div>
+        </div>
+        <div class="section-card">
+          <div class="section-label">About</div>
+          <div class="fb-list">
+            <div class="fb-row"><label>App</label><span id="about-app">Fistbump 0.1.0</span></div>
+            <div class="fb-row"><label>Node</label><span id="about-node">--</span></div>
+            <div class="fb-row"><label>Network</label><span id="about-network">--</span></div>
+            <div class="fb-row"><label>Height</label><span id="about-height">--</span></div>
+            <div class="fb-row"><label>Peers</label><span id="about-peers">--</span></div>
+          </div>
+        </div>
+        <div class="section-card mobile-only">
+          <div class="btn" id="btn-show-log-mobile" data-tab="log">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4h12M2 8h8M2 12h10"/></svg>
+            View Node Log
+          </div>
+        </div>
+        <div class="section-card mobile-only">
+          <div class="btn danger" id="btn-logout-mobile">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 2H4a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2M10 11l3-3-3-3M13 8H6"/></svg>
+            Logout
+          </div>
+        </div>
+      </section>
+      <section id="tab-console" class="page">
+        <h2 class="page-title">Console</h2>
+        <div class="console-container">
+          <pre class="console-output" id="console-output"><span class="muted">Do not paste commands from anyone you don't know or trust.</span></pre>
+          <div class="console-input-row">
+            <span class="console-prompt">&gt;</span>
+            <input type="text" id="console-input" placeholder="Enter command..." autocomplete="off" spellcheck="false">
+          </div>
+        </div>
+      </section>
+      <section id="tab-browse" class="page">
+        <div class="browser-empty">Enter a Fistbump name above to browse</div>
+      </section>
+      <section id="tab-namedetail" class="page">
+        <h2 class="page-title" id="nd-title"></h2>
+        <div id="nd-info"></div>
+        <div id="nd-bid-section"></div>
+        <div id="nd-records"></div>
+        <div id="nd-transfer-section"></div>
+        <div id="nd-bids"></div>
+      </section>
+    </main>
+  </div>
+  <div class="mobile-browser hidden" id="mobile-browser">
+    <div class="mobile-browser-bar">
+      <div class="mobile-browser-input-wrap">
+        <div class="search-lock hidden" id="browser-search-lock"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2.5" y="5.5" width="7" height="5" rx="1"/><path d="M4 5.5V4a2 2 0 1 1 4 0v1.5"/></svg></div>
+        <input type="text" id="browser-url-input" placeholder="Enter address..." autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" enterkeyhint="go" inputmode="url">
+        <div class="search-clear hidden" id="browser-search-clear">&times;</div>
+      </div>
+    </div>
+    <div class="mobile-browser-content" id="mobile-browser-content">
+      <div class="browser-empty">Enter a Fistbump name above to browse</div>
+    </div>
+  </div>
+  <div class="mobile-tab-bar" id="mobile-tab-bar">
+    <div class="mobile-tab active" data-mobile-tab="wallet">
+      <svg width="22" height="22" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="4" width="12" height="9" rx="1.5"/><path d="M4 4V3a1.5 1.5 0 0 1 1.5-1.5h5A1.5 1.5 0 0 1 12 3v1"/><circle cx="10.5" cy="8.5" r="1"/></svg>
+      Wallet
+    </div>
+    <div class="mobile-tab" data-mobile-tab="browser">
+      <svg width="22" height="22" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="6.5"/><path d="M1.5 8h13M8 1.5c-2 2-3 4-3 6.5s1 4.5 3 6.5M8 1.5c2 2 3 4 3 6.5s-1 4.5-3 6.5"/></svg>
+      Browse
+    </div>
+    <div class="mobile-tab" data-mobile-tab="settings">
+      <svg width="22" height="22" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="2.5"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.1 3.1l1.4 1.4M11.5 11.5l1.4 1.4M3.1 12.9l1.4-1.4M11.5 4.5l1.4-1.4"/></svg>
+      Settings
+    </div>
+  </div>
+</div>
+<div class="modal-overlay hidden" id="send-modal">
+  <div class="modal-card">
+    <div class="modal-header">
+      <h2>Send</h2>
+      <div class="close-btn" id="send-modal-close">&times;</div>
+    </div>
+    <div id="send-form">
+      <div class="field">
+        <label>To</label>
+        <input type="text" id="send-address" placeholder="Address or name" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+      </div>
+      <div class="field">
+        <label>Amount</label>
+        <input type="text" id="send-amount" placeholder="0.00" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+      </div>
+      <div id="send-status"></div>
+      <div class="btn primary" id="send-review">Review Transaction</div>
+    </div>
+    <div class="hidden fb-list" id="send-confirm">
+      <div>
+        <div class="confirm-row"><span class="confirm-label">To</span><span class="confirm-value" id="confirm-to"><span id="confirm-to-name"></span><span class="confirm-to-address mono" id="confirm-to-address"></span></span></div>
+        <div class="confirm-row"><span class="confirm-label">Amount</span><span class="confirm-value" id="confirm-amount"></span></div>
+        <div class="confirm-row"><span class="confirm-label">Fee</span><span class="confirm-value" id="confirm-fee"></span></div>
+        <div class="confirm-row total"><span class="confirm-label">Total</span><span class="confirm-value" id="confirm-total"></span></div>
+      </div>
+      <div id="send-confirm-status"></div>
+      <div class="confirm-actions">
+        <div class="btn" id="send-back">Back</div>
+        <div class="btn primary" id="send-do">Confirm &amp; Send</div>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="modal-overlay hidden" id="receive-modal">
+  <div class="modal-card">
+    <div class="modal-header">
+      <h2>Receive</h2>
+      <div class="close-btn" id="receive-modal-close">&times;</div>
+    </div>
+    <div id="recv-status"><div class="modal-loading">Generating address...</div></div>
+    <div class="address-display hidden" id="recv-addr"></div>
+    <div class="recv-actions hidden" id="recv-actions">
+      <div class="btn" id="copy-addr">Copy Address</div>
+      <div class="btn" id="recv-new">New Address</div>
+    </div>
+  </div>
+</div>
+<div class="modal-overlay hidden" id="confirm-modal">
+  <div class="modal-card confirm-dialog">
+    <div class="confirm-dialog-msg" id="confirm-msg"></div>
+    <div class="confirm-actions">
+      <div class="btn" id="confirm-cancel">Cancel</div>
+      <div class="btn primary" id="confirm-ok">Confirm</div>
+    </div>
+  </div>
+</div>
+<div class="modal-overlay hidden" id="multisig-modal">
+  <div class="modal-card">
+    <div class="modal-header">
+      <h2>Multisig Transaction</h2>
+      <div class="close-btn" id="multisig-close">&times;</div>
+    </div>
+    <div id="multisig-status"></div>
+    <div class="section-label">Partially Signed Transaction</div>
+    <textarea id="multisig-pstx" class="mono-sm textarea-code textarea-md" readonly></textarea>
+    <div class="btn-group">
+      <div class="btn" id="multisig-copy">Copy</div>
+    </div>
+    <div class="section-label mt-12">Import Cosigner Signature</div>
+    <textarea id="multisig-import" class="mono-sm textarea-code textarea-sm" placeholder="Paste cosigner's signed PSTX hex..."></textarea>
+    <div class="btn-group">
+      <div class="btn" id="multisig-combine">Combine</div>
+      <div class="btn primary" id="multisig-broadcast">Broadcast</div>
+    </div>
+    <div id="multisig-result"></div>
+  </div>
+</div>
+<div class="modal-overlay hidden" id="cosign-modal">
+  <div class="modal-card">
+    <div class="modal-header">
+      <h2>Cosign / Broadcast</h2>
+      <div class="close-btn" id="cosign-close">&times;</div>
+    </div>
+    <div class="section-label">Paste Transaction</div>
+    <textarea id="cosign-input" class="mono-sm textarea-code textarea-md" placeholder="Paste PSTX hex..."></textarea>
+    <div class="btn-group mt-8">
+      <div class="btn primary" id="cosign-sign">Sign with My Key</div>
+      <div class="btn primary hidden" id="cosign-broadcast">Broadcast</div>
+    </div>
+    <div id="cosign-result-section" class="hidden mt-12">
+      <div class="section-label">Signed Transaction</div>
+      <textarea id="cosign-output" class="mono-sm textarea-code textarea-md" readonly></textarea>
+      <div class="btn-group mt-8">
+        <div class="btn" id="cosign-copy">Copy Signed PSTX</div>
+        <div class="btn primary" id="cosign-broadcast-signed">Broadcast</div>
+      </div>
+    </div>
+    <div id="cosign-status"></div>
+  </div>
+</div>
+<div class="modal-overlay hidden" id="unlock-modal">
+  <div class="modal-card confirm-dialog">
+    <div class="confirm-dialog-msg">Enter passphrase to unlock wallet</div>
+    <div class="field">
+      <input type="password" id="unlock-passphrase" placeholder="Passphrase" autocomplete="off">
+    </div>
+    <div id="unlock-status"></div>
+    <div class="confirm-actions">
+      <div class="btn" id="unlock-cancel">Cancel</div>
+      <div class="btn primary" id="unlock-ok">Unlock</div>
+    </div>
+  </div>
+</div>
+<div class="modal-overlay hidden" id="qr-show-modal">
+  <div class="modal-card">
+    <div class="modal-header">
+      <h2>Recovery QR Code</h2>
+      <div class="close-btn" id="qr-show-close">&times;</div>
+    </div>
+    <div id="qr-show-status"></div>
+    <div class="qr-canvas-wrap hidden text-center" id="qr-canvas-wrap">
+      <canvas id="qr-canvas"></canvas>
+    </div>
+    <div class="mnemonic-warning mt-12">Anyone who scans this code can access your wallet. Do not share it.</div>
+  </div>
+</div>
+<div class="modal-overlay hidden" id="qr-scan-modal">
+  <div class="modal-card">
+    <div class="modal-header">
+      <h2>Scan Recovery QR</h2>
+      <div class="close-btn" id="qr-scan-close">&times;</div>
+    </div>
+    <div id="qr-scan-status"></div>
+    <div class="qr-video-wrap">
+      <video id="qr-video" class="qr-video hidden" autoplay playsinline muted></video>
+    </div>
+  </div>
+</div>
+<div class="modal-overlay hidden" id="repair-modal">
+  <div class="modal-card">
+    <div class="modal-header">
+      <h2>Repair Bid</h2>
+      <div class="close-btn" id="repair-close">&times;</div>
+    </div>
+    <div id="repair-name" class="repair-name"></div>
+    <div id="repair-lockup" class="repair-lockup"></div>
+    <div class="mb-8">
+      <label class="form-label">Bid Value</label>
+      <input type="number" id="repair-value" step="any" min="0" placeholder="Enter your actual bid" class="form-input">
+    </div>
+    <div class="btn-group">
+      <div class="btn primary btn-flex" id="repair-submit">Recover</div>
+      <div class="btn btn-flex" id="repair-auto">Auto-Recover</div>
+    </div>
+    <div id="repair-status" class="mt-12"></div>
+  </div>
+</div>
+<div class="toast-container" id="toast-container"></div>
+<script src="js/qr.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

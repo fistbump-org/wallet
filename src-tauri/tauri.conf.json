@@ -1,0 +1,44 @@
+{
+  "productName": "Fistbump",
+  "version": "0.1.0",
+  "identifier": "org.fistbump.wallet",
+  "build": {
+    "frontendDist": "../ui",
+    "beforeDevCommand": "node -e \"['src-tauri/target/debug/fbd','src-tauri/target/debug/fbd.exe'].forEach(f=>{try{require('fs').unlinkSync(f)}catch{}})\"",
+    "beforeBuildCommand": "node -e \"['src-tauri/target/release/fbd','src-tauri/target/release/fbd.exe','src-tauri/target/universal-apple-darwin/release/fbd'].forEach(f=>{try{require('fs').unlinkSync(f)}catch{}})\""
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Fistbump",
+        "width": 1000,
+        "height": 700,
+        "minWidth": 600,
+        "minHeight": 400,
+        "decorations": false,
+        "backgroundColor": [9, 9, 11, 255]
+      }
+    ],
+    "withGlobalTauri": true,
+    "security": {
+      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost http://127.0.0.1:* 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "iOS": {
+      "developmentTeam": "5JAGPKCDD7"
+    },
+    "macOS": {
+      "entitlements": "Entitlements.plist"
+    }
+  }
+}
