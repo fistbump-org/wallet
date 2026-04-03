@@ -671,6 +671,13 @@ fn start_node(app_handle: tauri::AppHandle) {
     #[cfg(not(target_os = "android"))]
     cmd.env("NSUnbufferedIO", "YES");
 
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+
     let result = cmd.spawn();
 
     let mut child = match result {
