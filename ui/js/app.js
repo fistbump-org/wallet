@@ -156,10 +156,24 @@
     });
   } catch(e) {}
 
-  // Titlebar drag
+  // Window control buttons (must use addEventListener, not inline onclick — CSP blocks inline scripts in production)
+  document.querySelectorAll('.tb-minimize').forEach(function(el) {
+    el.addEventListener('click', function() { fistbump.minimize(); });
+  });
+  document.querySelectorAll('.tb-maximize').forEach(function(el) {
+    el.addEventListener('click', function() { fistbump.maximize(); });
+  });
+  document.querySelectorAll('.tb-close').forEach(function(el) {
+    el.addEventListener('click', function() { fistbump.close(); });
+  });
+
+  // Titlebar drag — stop propagation from interactive areas so startDragging
+  // never fires when clicking buttons/search.
+  document.querySelectorAll('.titlebar-controls, .titlebar-search').forEach(function(el) {
+    el.addEventListener('mousedown', function(e) { e.stopPropagation(); });
+  });
   document.querySelectorAll('.titlebar, .login-titlebar').forEach(function(el) {
     el.addEventListener('mousedown', function(e) {
-      if (e.target.closest('.titlebar-controls') || e.target.closest('.titlebar-search')) return;
       if (e.button !== 0) return;
       __currentWindow.startDragging();
     });
