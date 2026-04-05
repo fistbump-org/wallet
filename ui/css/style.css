@@ -379,7 +379,6 @@ html, body {
   background: var(--bg);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
-  -webkit-app-region: drag;
   padding-left: 12px;
   padding-right: 12px;
   gap: 12px;
@@ -395,7 +394,6 @@ html, body {
   color: var(--text);
   letter-spacing: -0.01em;
   flex-shrink: 0;
-  -webkit-app-region: drag;
 }
 .titlebar-logo {
   width: 18px;
@@ -407,11 +405,9 @@ html, body {
   height: 16px;
   background: var(--border);
   flex-shrink: 0;
-  -webkit-app-region: drag;
 }
 .titlebar-search {
   margin-left: auto;
-  -webkit-app-region: no-drag;
   position: relative;
 }
 .search-lock {
@@ -473,13 +469,11 @@ html, body {
   font-size: 11px;
   color: var(--text-muted);
   flex-shrink: 0;
-  -webkit-app-region: drag;
 }
 .titlebar-controls {
   display: flex;
   align-items: center;
   gap: 2px;
-  -webkit-app-region: no-drag;
   flex-shrink: 0;
 }
 .tb-btn {
@@ -1417,7 +1411,7 @@ body[data-platform="android"] #settings-resolving {
   color: var(--text-muted);
   border-radius: 6px;
   cursor: pointer;
-  -webkit-app-region: no-drag;
+
   flex-shrink: 0;
   transition: background 0.12s, color 0.12s;
 }
@@ -1464,7 +1458,7 @@ body[data-platform="android"] #settings-resolving {
     padding: 0 16px 8px;
     padding-top: calc(env(safe-area-inset-top, 0px) + 4px);
     border-bottom: 1px solid var(--border);
-    -webkit-app-region: no-drag;
+  
     gap: 8px;
     flex-wrap: wrap;
     align-content: center;
