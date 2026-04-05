@@ -631,25 +631,6 @@ fn start_node(app_handle: tauri::AppHandle) {
 
     cleanup_stale(&state);
 
-    // On Windows, copy Swift runtime DLLs next to fbd.exe so they're found at launch.
-    // Tauri extracts externalBin to a temp dir, but resources stay in the install dir.
-    #[cfg(windows)]
-    if let (Some(fbd_dir), Ok(exe)) = (binary.parent(), std::env::current_exe()) {
-        if let Some(install_dir) = exe.parent() {
-            for entry in fs::read_dir(install_dir).into_iter().flatten() {
-                if let Ok(e) = entry {
-                    let name = e.file_name();
-                    if name.to_string_lossy().ends_with(".dll") {
-                        let dest = fbd_dir.join(&name);
-                        if !dest.exists() {
-                            let _ = fs::copy(e.path(), &dest);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     println!("[fistbump] starting fbd: {:?}", binary);
 
     let mut cmd = Command::new(&binary);
