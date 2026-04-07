@@ -262,6 +262,11 @@ fn get_wallet_build_hash() -> String {
 }
 
 #[tauri::command]
+fn get_fbd_bundled_hash() -> String {
+    env!("FBD_BUNDLED_HASH").to_string()
+}
+
+#[tauri::command]
 fn get_api_key_cmd(state: tauri::State<'_, AppState>) -> Option<String> {
     let settings = state.settings.lock().unwrap();
     get_api_key(&settings)
@@ -1585,6 +1590,7 @@ pub fn run() {
             get_log,
             get_api_key_cmd,
             get_wallet_build_hash,
+            get_fbd_bundled_hash,
             open_external,
             browse,
             browse_error,

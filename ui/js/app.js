@@ -145,14 +145,28 @@
     };
   }
 
-  // Set app version + build hash from Tauri
+  // Set app version + wallet build hash, and pre-populate the bundled
+  // fbd hash. Both are baked into the wallet binary at compile time
+  // (build.rs reads the wallet's git HEAD and fbd's BuildInfo.swift).
+  // The "Node" row is also updated live by getblockchaininfo once fbd
+  // connects, but the bundled hash gives an immediate answer at startup.
   try {
     Promise.all([
       window.__TAURI__.app.getVersion(),
-      window.__TAURI__.core.invoke('get_wallet_build_hash')
+      window.__TAURI__.core.invoke('get_wallet_build_hash'),
+      window.__TAURI__.core.invoke('get_fbd_bundled_hash')
     ]).then(function(r) {
-      var v = r[0], h = r[1];
-      document.getElementById('about-app').textContent = 'Fistbump ' + v + (h ? ' (' + h + ')' : '');
+      var v = r[0], walletHash = r[1], fbdHash = r[2];
+      var label = 'Fistbump ' + v;
+      if (walletHash) label += ' (' + walletHash + ')';
+      var appEl = document.getElementById('about-app');
+      if (appEl) appEl.textContent = label;
+      if (fbdHash && fbdHash !== 'unknown') {
+        var nodeEl = document.getElementById('about-node');
+        if (nodeEl && nodeEl.textContent === '--') {
+          nodeEl.textContent = 'fbd 0.1.0 (' + fbdHash + ')';
+        }
+      }
     });
   } catch(e) {}
 
