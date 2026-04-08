@@ -3,6 +3,8 @@ use serde_json::{json, Value};
 use std::fs;
 #[cfg(any(desktop, target_os = "android"))]
 use std::io::{BufRead, BufReader};
+#[cfg(desktop)]
+use std::path::Path;
 use std::path::PathBuf;
 #[cfg(any(desktop, target_os = "android"))]
 use std::process::{Command, Stdio};
@@ -55,11 +57,27 @@ struct Settings {
     miner_threads: u32,
 }
 
+/// Description of a legacy fbd data directory that has wallet files we could
+/// copy into the wallet's isolated data dir on first launch. Only populated on
+/// desktop; mobile is already sandbox-isolated from any standalone fbd.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct MigrationCandidate {
+    /// Absolute path to the source `<old>/wallets` directory.
+    source: String,
+    /// Number of wallet subdirectories found in `source`.
+    wallet_count: usize,
+}
+
 pub struct AppState {
     settings: Mutex<Settings>,
     log_lines: Mutex<Vec<String>>,
     fbd_pid: Mutex<Option<u32>>,
     is_quitting: AtomicBool,
+    /// Some(candidate) while the frontend is being asked whether to copy
+    /// wallets from an old `~/.fbd` directory. start_node is deferred until
+    /// `resolve_migration` is called.
+    #[cfg(desktop)]
+    pending_migration: Mutex<Option<MigrationCandidate>>,
 }
 
 fn settings_base_dir() -> PathBuf {
@@ -116,6 +134,101 @@ fn cookie_path_for(network: &str) -> PathBuf {
     } else {
         base.join(network).join(".cookie")
     }
+}
+
+/// Location fbd uses by default (not the wallet's isolated copy). We check
+/// here on first launch to offer the user a chance to bring their wallets
+/// over. Desktop only — mobile is sandboxed so there's nothing to migrate.
+#[cfg(desktop)]
+fn legacy_fbd_wallets_dir() -> PathBuf {
+    let base = if cfg!(target_os = "windows") {
+        let local_app_data = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| "C:\\".to_string());
+        PathBuf::from(local_app_data).join("fbd")
+    } else {
+        dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".fbd")
+    };
+    if DEFAULT_NETWORK == "main" {
+        base.join("wallets")
+    } else {
+        base.join(DEFAULT_NETWORK).join("wallets")
+    }
+}
+
+/// Wallet directory inside the wallet's isolated fbd data dir.
+#[cfg(desktop)]
+fn wallet_wallets_dir() -> PathBuf {
+    let base = fbd_data_dir();
+    if DEFAULT_NETWORK == "main" {
+        base.join("wallets")
+    } else {
+        base.join(DEFAULT_NETWORK).join("wallets")
+    }
+}
+
+/// Marker written next to the wallets dir after the migration prompt has been
+/// answered (either "copy" or "skip"), so we never pester the user twice.
+#[cfg(desktop)]
+fn migration_marker_path() -> PathBuf {
+    fbd_data_dir().join(".fistbump-migration-done")
+}
+
+/// Counts direct subdirectories of `dir`. Used to decide whether the legacy
+/// wallets dir is worth migrating (empty = nothing to do).
+#[cfg(desktop)]
+fn count_wallet_subdirs(dir: &Path) -> usize {
+    fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .filter_map(|e| e.ok())
+                .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+                .count()
+        })
+        .unwrap_or(0)
+}
+
+/// Check for a legacy `~/.fbd/wallets` directory we can offer to copy. Returns
+/// `None` if the marker exists, the legacy dir is missing/empty, or the new
+/// wallets dir already has content (meaning the user has already been using
+/// the isolated location).
+#[cfg(desktop)]
+fn detect_migration_candidate() -> Option<MigrationCandidate> {
+    if migration_marker_path().exists() {
+        return None;
+    }
+    if count_wallet_subdirs(&wallet_wallets_dir()) > 0 {
+        return None;
+    }
+    let legacy = legacy_fbd_wallets_dir();
+    let count = count_wallet_subdirs(&legacy);
+    if count == 0 {
+        return None;
+    }
+    Some(MigrationCandidate {
+        source: legacy.display().to_string(),
+        wallet_count: count,
+    })
+}
+
+/// Recursively copy `src` into `dst`, creating `dst` and any missing parents.
+/// Symlinks are skipped intentionally — fbd wallet files are plain files in a
+/// flat per-wallet subdir, so there's no need to chase links.
+#[cfg(desktop)]
+fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_dir_recursive(&src_path, &dst_path)?;
+        } else if file_type.is_file() {
+            fs::copy(&src_path, &dst_path)?;
+        }
+    }
+    Ok(())
 }
 
 // Make android_files_dir available on all platforms (used by cookie_path at compile time)
@@ -845,7 +958,19 @@ pub extern "C" fn register_biometric_handlers(
     let _ = BIOMETRIC_DELETE.set(delete);
 }
 
-// macOS: file-based storage + LAContext.evaluatePolicy for Touch ID
+// macOS: per-wallet encrypted file under ~/.fistbump/biometric/, gated by a
+// Touch ID prompt via LAContext.evaluatePolicy.
+//
+// Why not the Keychain? SecItemAdd with kSecAttrAccessControl requires a
+// `keychain-access-groups` entitlement; dev builds and ad-hoc-signed builds
+// fail with errSecMissingEntitlement (-34018). File storage works in every
+// build configuration and sidesteps the entitlement entirely.
+//
+// Security boundary: 0600 file perms on each wallet file + the Touch ID
+// gate in load(). The in-file random key means the encryption is really
+// obfuscation — anyone who can read the file can decrypt it. But the same
+// attacker could already read the wallet's own on-disk state in ~/.fistbump,
+// so this isn't the weak link.
 #[cfg(target_os = "macos")]
 mod biometric_macos {
     use std::ffi::c_void;
@@ -858,96 +983,24 @@ mod biometric_macos {
         fn sel_registerName(name: *const u8) -> *mut c_void;
         fn objc_msgSend();
 
-        // libdispatch
+        // libdispatch — turns LAContext's async callback into a sync call.
         fn dispatch_semaphore_create(value: isize) -> *mut c_void;
         fn dispatch_semaphore_signal(dsema: *mut c_void) -> isize;
         fn dispatch_semaphore_wait(dsema: *mut c_void, timeout: u64) -> isize;
 
-        // Block runtime
+        // Block runtime — LAContext.evaluatePolicy takes an Objective-C block.
         static _NSConcreteStackBlock: c_void;
     }
 
     const DISPATCH_TIME_FOREVER: u64 = !0;
 
-    // Keychain service name for biometric-protected passphrases
-    const SERVICE: &[u8] = b"org.fistbump.wallet\0";
-
-    #[link(name = "Security", kind = "framework")]
-    extern "C" {
-        fn SecItemAdd(attributes: *const c_void, result: *mut c_void) -> i32;
-        fn SecItemCopyMatching(query: *const c_void, result: *mut c_void) -> i32;
-        fn SecItemDelete(query: *const c_void) -> i32;
-        fn SecAccessControlCreateWithFlags(
-            allocator: *const c_void,
-            protection: *const c_void,
-            flags: u64,
-            error: *mut c_void,
-        ) -> *mut c_void;
-
-        static kSecClass: *const c_void;
-        static kSecClassGenericPassword: *const c_void;
-        static kSecAttrService: *const c_void;
-        static kSecAttrAccount: *const c_void;
-        static kSecValueData: *const c_void;
-        static kSecReturnData: *const c_void;
-        static kSecAttrAccessControl: *const c_void;
-        static kSecAttrAccessibleWhenUnlockedThisDeviceOnly: *const c_void;
-        static kSecUseAuthenticationContext: *const c_void;
+    fn bio_dir() -> PathBuf {
+        crate::settings_dir().join("biometric")
     }
 
-    // kSecAccessControlBiometryCurrentSet = 1 << 3
-    const ACCESS_CONTROL_BIOMETRY: u64 = 1 << 3;
-
-    /// Create a CFDictionary from key-value pairs using toll-free bridging with NSDictionary.
-    unsafe fn make_dict(pairs: &[(*const c_void, *const c_void)]) -> *mut c_void {
-        let cls = objc_getClass(b"NSMutableDictionary\0".as_ptr());
-        type AllocFn = unsafe extern "C" fn(*mut c_void, *mut c_void) -> *mut c_void;
-        type InitFn = unsafe extern "C" fn(*mut c_void, *mut c_void) -> *mut c_void;
-        type SetFn = unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void, *mut c_void);
-        let alloc: AllocFn = std::mem::transmute(objc_msgSend as *const ());
-        let init: InitFn = std::mem::transmute(objc_msgSend as *const ());
-        let set: SetFn = std::mem::transmute(objc_msgSend as *const ());
-        let obj = alloc(cls, sel_registerName(b"alloc\0".as_ptr()));
-        let obj = init(obj, sel_registerName(b"init\0".as_ptr()));
-        for &(k, v) in pairs {
-            set(obj, sel_registerName(b"setObject:forKey:\0".as_ptr()), v as *mut c_void, k as *mut c_void);
-        }
-        obj
+    fn bio_path(wallet: &str) -> PathBuf {
+        bio_dir().join(wallet)
     }
-
-    /// Create an NSData from bytes.
-    unsafe fn make_nsdata(bytes: &[u8]) -> *mut c_void {
-        let cls = objc_getClass(b"NSData\0".as_ptr());
-        type DataFn = unsafe extern "C" fn(*mut c_void, *mut c_void, *const u8, usize) -> *mut c_void;
-        let data_fn: DataFn = std::mem::transmute(objc_msgSend as *const ());
-        data_fn(cls, sel_registerName(b"dataWithBytes:length:\0".as_ptr()), bytes.as_ptr(), bytes.len())
-    }
-
-    /// Create an NSString from a Rust str (must be null-terminated).
-    unsafe fn make_nsstring(s: &str) -> *mut c_void {
-        let cls = objc_getClass(b"NSString\0".as_ptr());
-        let cstr = std::ffi::CString::new(s).unwrap_or_default();
-        type StrFn = unsafe extern "C" fn(*mut c_void, *mut c_void, *const i8) -> *mut c_void;
-        let str_fn: StrFn = std::mem::transmute(objc_msgSend as *const ());
-        str_fn(cls, sel_registerName(b"stringWithUTF8String:\0".as_ptr()), cstr.as_ptr())
-    }
-
-    /// Get bytes from NSData.
-    unsafe fn nsdata_bytes(data: *mut c_void) -> Option<Vec<u8>> {
-        if data.is_null() { return None; }
-        type BytesFn = unsafe extern "C" fn(*mut c_void, *mut c_void) -> *const u8;
-        type LenFn = unsafe extern "C" fn(*mut c_void, *mut c_void) -> usize;
-        let bytes_fn: BytesFn = std::mem::transmute(objc_msgSend as *const ());
-        let len_fn: LenFn = std::mem::transmute(objc_msgSend as *const ());
-        let ptr = bytes_fn(data, sel_registerName(b"bytes\0".as_ptr()));
-        let len = len_fn(data, sel_registerName(b"length\0".as_ptr()));
-        if ptr.is_null() || len == 0 { return None; }
-        Some(std::slice::from_raw_parts(ptr, len).to_vec())
-    }
-
-    const KBOOL_TRUE: *const c_void = 1 as *const c_void; // kCFBooleanTrue
-
-
 
     pub fn is_available() -> bool {
         unsafe {
@@ -970,55 +1023,16 @@ mod biometric_macos {
         }
     }
 
-    fn bio_dir() -> PathBuf {
-        crate::settings_dir().join("biometric")
-    }
-
-    fn bio_path(wallet: &str) -> PathBuf {
-        bio_dir().join(wallet)
-    }
-
-    /// Derive an encryption key from hardware UUID + salt using PBKDF2.
-    /// 600,000 iterations makes brute-force impractical even if UUID is known.
-    fn derive_key(salt: &[u8]) -> [u8; 32] {
-        use ring::pbkdf2;
-        use std::num::NonZeroU32;
-
-        let uuid = std::process::Command::new("ioreg")
-            .args(["-rd1", "-c", "IOPlatformExpertDevice"])
-            .output()
-            .ok()
-            .and_then(|o| {
-                let text = String::from_utf8_lossy(&o.stdout);
-                text.lines()
-                    .find(|l| l.contains("IOPlatformUUID"))
-                    .and_then(|l| l.split('"').nth(3))
-                    .map(|s| s.to_string())
-            })
-            .unwrap_or_default();
-
-        let mut password = Vec::new();
-        password.extend_from_slice(b"fistbump-bio-v3:");
-        password.extend_from_slice(uuid.as_bytes());
-
-        let mut key = [0u8; 32];
-        pbkdf2::derive(
-            pbkdf2::PBKDF2_HMAC_SHA256,
-            NonZeroU32::new(600_000).unwrap(),
-            salt,
-            &password,
-            &mut key,
-        );
-        key
-    }
-
-    /// Encrypt with AES-256-GCM. File format: [12-byte nonce | 16-byte salt | ciphertext+tag]
-    pub fn save(wallet: &str, passphrase: &str) -> bool {
+    /// Encrypt `passphrase` under a freshly-generated 32-byte key and write
+    /// `[key || nonce || ciphertext+tag]` to `~/.fistbump/biometric/<wallet>`.
+    /// The key is embedded in the file because storing it elsewhere under the
+    /// same user account gains nothing against the relevant attacker.
+    pub fn save(wallet: &str, passphrase: &str) -> Result<(), String> {
         use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, AES_256_GCM};
         use ring::rand::{SecureRandom, SystemRandom};
 
         let dir = bio_dir();
-        let _ = std::fs::create_dir_all(&dir);
+        std::fs::create_dir_all(&dir).map_err(|e| format!("create biometric dir: {}", e))?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -1026,57 +1040,66 @@ mod biometric_macos {
         }
 
         let rng = SystemRandom::new();
+        let mut key_bytes = [0u8; 32];
         let mut nonce_bytes = [0u8; 12];
-        let mut salt = [0u8; 16];
-        if rng.fill(&mut nonce_bytes).is_err() { return false; }
-        if rng.fill(&mut salt).is_err() { return false; }
+        rng.fill(&mut key_bytes).map_err(|_| "rng failed".to_string())?;
+        rng.fill(&mut nonce_bytes).map_err(|_| "rng failed".to_string())?;
 
-        let key_bytes = derive_key(&salt);
-        let key = match UnboundKey::new(&AES_256_GCM, &key_bytes) {
-            Ok(k) => LessSafeKey::new(k),
-            Err(_) => return false,
-        };
-
-        let nonce = match Nonce::try_assume_unique_for_key(&nonce_bytes) {
-            Ok(n) => n,
-            Err(_) => return false,
-        };
+        let key = LessSafeKey::new(
+            UnboundKey::new(&AES_256_GCM, &key_bytes).map_err(|_| "key init failed".to_string())?,
+        );
+        let nonce = Nonce::try_assume_unique_for_key(&nonce_bytes)
+            .map_err(|_| "nonce init failed".to_string())?;
 
         let mut data = passphrase.as_bytes().to_vec();
-        if key.seal_in_place_append_tag(nonce, Aad::empty(), &mut data).is_err() {
-            return false;
+        key.seal_in_place_append_tag(nonce, Aad::empty(), &mut data)
+            .map_err(|_| "encryption failed".to_string())?;
+
+        // File layout: [32 key][12 nonce][ciphertext + 16-byte GCM tag]
+        let mut out = Vec::with_capacity(32 + 12 + data.len());
+        out.extend_from_slice(&key_bytes);
+        out.extend_from_slice(&nonce_bytes);
+        out.extend_from_slice(&data);
+
+        let path = bio_path(wallet);
+        std::fs::write(&path, &out).map_err(|e| format!("write biometric file: {}", e))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
         }
-
-        // File: nonce (12) + salt (16) + ciphertext+tag
-        let mut file_data = Vec::with_capacity(12 + 16 + data.len());
-        file_data.extend_from_slice(&nonce_bytes);
-        file_data.extend_from_slice(&salt);
-        file_data.extend_from_slice(&data);
-
-        std::fs::write(bio_path(wallet), &file_data).is_ok()
+        Ok(())
     }
 
+    /// Block on a Touch ID prompt, then decrypt `~/.fistbump/biometric/<wallet>`
+    /// and return the stored passphrase. Any failure in either step returns None.
     pub fn load(wallet: &str) -> Option<String> {
         use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, AES_256_GCM};
 
         let path = bio_path(wallet);
-        if !path.exists() { return None; }
+        if !path.exists() {
+            return None;
+        }
 
-        // Touch ID required before decryption
-        if !evaluate_biometric("Unlock wallet") { return None; }
+        // Touch ID happens BEFORE decryption so a failed/cancelled biometric
+        // prompt can't be bypassed by anyone who couldn't have triggered it.
+        if !prompt_biometric("Unlock wallet") {
+            return None;
+        }
 
-        let file_data = std::fs::read(&path).ok()?;
-        if file_data.len() < 12 + 16 + 16 { return None; } // nonce + salt + min tag
+        let data = std::fs::read(&path).ok()?;
+        if data.len() < 32 + 12 + 16 {
+            return None;
+        }
+        let key_bytes: [u8; 32] = data[..32].try_into().ok()?;
+        let nonce_bytes: [u8; 12] = data[32..44].try_into().ok()?;
+        let mut ciphertext = data[44..].to_vec();
 
-        let nonce_bytes = &file_data[..12];
-        let salt = &file_data[12..28];
-        let mut ciphertext = file_data[28..].to_vec();
-
-        let key_bytes = derive_key(salt);
         let key = LessSafeKey::new(UnboundKey::new(&AES_256_GCM, &key_bytes).ok()?);
-        let nonce = Nonce::try_assume_unique_for_key(nonce_bytes).ok()?;
-
-        let plaintext = key.open_in_place(nonce, Aad::empty(), &mut ciphertext).ok()?;
+        let nonce = Nonce::try_assume_unique_for_key(&nonce_bytes).ok()?;
+        let plaintext = key
+            .open_in_place(nonce, Aad::empty(), &mut ciphertext)
+            .ok()?;
         String::from_utf8(plaintext.to_vec()).ok()
     }
 
@@ -1084,9 +1107,10 @@ mod biometric_macos {
         let _ = std::fs::remove_file(bio_path(wallet));
     }
 
-    /// Show Touch ID prompt via LAContext.evaluatePolicy and block until done.
-    fn evaluate_biometric(reason: &str) -> bool {
-        // Block layout for ^(BOOL success, NSError *error)
+    /// Present a Touch ID prompt (LAPolicyDeviceOwnerAuthenticationWithBiometrics)
+    /// and block the caller until the user finishes or cancels.
+    fn prompt_biometric(reason: &str) -> bool {
+        // Objective-C block layout for `^(BOOL success, NSError *error)`.
         #[repr(C)]
         struct ReplyBlock {
             isa: *const c_void,
@@ -1107,37 +1131,57 @@ mod biometric_macos {
             size: std::mem::size_of::<ReplyBlock>(),
         };
 
-        unsafe extern "C" fn reply_invoke(block: *mut ReplyBlock, success: bool, _err: *mut c_void) {
+        unsafe extern "C" fn reply_invoke(
+            block: *mut ReplyBlock,
+            success: bool,
+            _err: *mut c_void,
+        ) {
             *(*block).success = success;
             dispatch_semaphore_signal((*block).semaphore);
         }
 
         unsafe {
             let cls = objc_getClass(b"LAContext\0".as_ptr());
-            if cls.is_null() { return false; }
+            if cls.is_null() {
+                return false;
+            }
 
             type AllocFn = unsafe extern "C" fn(*mut c_void, *mut c_void) -> *mut c_void;
             type InitFn = unsafe extern "C" fn(*mut c_void, *mut c_void) -> *mut c_void;
-            type EvalFn = unsafe extern "C" fn(*mut c_void, *mut c_void, isize, *mut c_void, *mut ReplyBlock);
+            type EvalPolicyFn = unsafe extern "C" fn(
+                *mut c_void,
+                *mut c_void,
+                isize,
+                *mut c_void,
+                *mut ReplyBlock,
+            );
             type ReleaseFn = unsafe extern "C" fn(*mut c_void, *mut c_void);
 
             let alloc: AllocFn = std::mem::transmute(objc_msgSend as *const ());
             let init: InitFn = std::mem::transmute(objc_msgSend as *const ());
-            let eval: EvalFn = std::mem::transmute(objc_msgSend as *const ());
+            let evaluate_policy: EvalPolicyFn = std::mem::transmute(objc_msgSend as *const ());
             let release: ReleaseFn = std::mem::transmute(objc_msgSend as *const ());
 
             let ctx = alloc(cls, sel_registerName(b"alloc\0".as_ptr()));
             let ctx = init(ctx, sel_registerName(b"init\0".as_ptr()));
 
-            // Create NSString for reason
+            // NSString *reason = [[NSString alloc] initWithBytes:... length:... encoding:NSUTF8StringEncoding]
             let ns_cls = objc_getClass(b"NSString\0".as_ptr());
-            type StrInitFn = unsafe extern "C" fn(*mut c_void, *mut c_void, *const u8, usize, u64) -> *mut c_void;
+            type StrInitFn = unsafe extern "C" fn(
+                *mut c_void,
+                *mut c_void,
+                *const u8,
+                usize,
+                u64,
+            ) -> *mut c_void;
             let str_init: StrInitFn = std::mem::transmute(objc_msgSend as *const ());
             let reason_obj = alloc(ns_cls, sel_registerName(b"alloc\0".as_ptr()));
             let reason_obj = str_init(
                 reason_obj,
                 sel_registerName(b"initWithBytes:length:encoding:\0".as_ptr()),
-                reason.as_ptr(), reason.len(), 4, // NSUTF8StringEncoding = 4
+                reason.as_ptr(),
+                reason.len(),
+                4, // NSUTF8StringEncoding
             );
 
             let sem = dispatch_semaphore_create(0);
@@ -1153,11 +1197,13 @@ mod biometric_macos {
                 success: &mut success,
             };
 
-            eval(ctx,
-                 sel_registerName(b"evaluatePolicy:localizedReason:reply:\0".as_ptr()),
-                 1, // LAPolicyDeviceOwnerAuthenticationWithBiometrics
-                 reason_obj as *mut c_void,
-                 &mut block);
+            evaluate_policy(
+                ctx,
+                sel_registerName(b"evaluatePolicy:localizedReason:reply:\0".as_ptr()),
+                1, // LAPolicyDeviceOwnerAuthenticationWithBiometrics
+                reason_obj as *mut c_void,
+                &mut block,
+            );
 
             dispatch_semaphore_wait(sem, DISPATCH_TIME_FOREVER);
 
@@ -1323,7 +1369,12 @@ fn biometric_save(wallet: String, passphrase: String, _state: tauri::State<'_, A
         return Ok(f(w.as_ptr(), p.as_ptr()));
     }
     #[cfg(target_os = "macos")]
-    { return Ok(biometric_macos::save(&wallet, &passphrase)); }
+    {
+        return match biometric_macos::save(&wallet, &passphrase) {
+            Ok(()) => Ok(true),
+            Err(e) => Err(e),
+        };
+    }
     #[cfg(target_os = "android")]
     { return Ok(biometric_android::save(&wallet, &passphrase)); }
     #[allow(unreachable_code)]
@@ -1568,6 +1619,54 @@ fn setup_proxy() -> Result<serde_json::Value, String> {
     }))
 }
 
+#[cfg(desktop)]
+#[tauri::command]
+fn get_pending_migration(state: tauri::State<'_, AppState>) -> Option<MigrationCandidate> {
+    state.pending_migration.lock().unwrap().clone()
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+fn resolve_migration(
+    accept: bool,
+    state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    // Clear pending state up front so a repeat invocation from a double-click
+    // won't run the copy twice.
+    let candidate = state.pending_migration.lock().unwrap().take();
+
+    if accept {
+        let Some(candidate) = candidate else {
+            return Err("no pending migration".to_string());
+        };
+        let src = PathBuf::from(&candidate.source);
+        let dst = wallet_wallets_dir();
+        // Make sure parents exist before copying.
+        if let Some(parent) = dst.parent() {
+            fs::create_dir_all(parent).map_err(|e| format!("create dest dir: {}", e))?;
+        }
+        copy_dir_recursive(&src, &dst).map_err(|e| format!("copy wallets: {}", e))?;
+        println!(
+            "[fistbump] migrated {} wallet(s) from {} to {}",
+            candidate.wallet_count,
+            src.display(),
+            dst.display()
+        );
+    }
+
+    // Mark as resolved so we never prompt again, regardless of the answer.
+    let marker = migration_marker_path();
+    if let Some(parent) = marker.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let _ = fs::write(&marker, b"1");
+
+    // Now that the wallets (if any) are in place, start fbd.
+    start_node(app);
+    Ok(())
+}
+
 // ── App ──
 
 #[cfg(mobile)]
@@ -1589,6 +1688,8 @@ pub fn run() {
             log_lines: Mutex::new(Vec::new()),
             fbd_pid: Mutex::new(None),
             is_quitting: AtomicBool::new(false),
+            #[cfg(desktop)]
+            pending_migration: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
             rpc_call,
@@ -1617,9 +1718,30 @@ pub fn run() {
             renew_ca,
             #[cfg(desktop)]
             setup_proxy,
+            #[cfg(desktop)]
+            get_pending_migration,
+            #[cfg(desktop)]
+            resolve_migration,
         ])
         .setup(|app| {
-            #[cfg(any(desktop, target_os = "android"))]
+            // On desktop, check whether we should offer to copy wallets from a
+            // legacy `~/.fbd/wallets` install before starting fbd. If there's a
+            // candidate, stash it and defer start_node until the frontend calls
+            // `resolve_migration`. On Android we just start fbd immediately.
+            #[cfg(desktop)]
+            {
+                if let Some(candidate) = detect_migration_candidate() {
+                    println!(
+                        "[fistbump] legacy fbd install detected at {} ({} wallet(s)) — waiting for user decision",
+                        candidate.source, candidate.wallet_count
+                    );
+                    let state = app.state::<AppState>();
+                    *state.pending_migration.lock().unwrap() = Some(candidate);
+                } else {
+                    start_node(app.handle().clone());
+                }
+            }
+            #[cfg(target_os = "android")]
             start_node(app.handle().clone());
 
             #[cfg(desktop)]

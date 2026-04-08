@@ -387,11 +387,13 @@
   async function requireUnlock() {
     if (!walletEncrypted || walletUnlocked) return true;
 
-    // Try biometric unlock first
+    // Try biometric unlock first.
     if (biometricSupported && activeWallet && localStorage.getItem('biometric_' + activeWallet) === '1') {
+      var loadedOk = false;
       try {
         var passphrase = await __invoke('biometric_load', { wallet: activeWallet });
         if (passphrase) {
+          loadedOk = true;
           var res = await rpc('walletpassphrase', [passphrase, 300]);
           if (!res.error) {
             walletUnlocked = true;
@@ -400,7 +402,15 @@
           }
         }
       } catch(e) {
-        // Biometric failed or cancelled — fall through to manual input
+        // Biometric failed or was cancelled by the user.
+      }
+      // If biometric_load returned nothing (empty Keychain entry — e.g. after
+      // upgrading from the legacy file-based store, or after the user reset
+      // Touch ID enrollment and the entry was invalidated), clear the local
+      // flag so offerBiometricSetup will re-offer after a successful manual
+      // unlock instead of silently staying in "enabled but broken" mode.
+      if (!loadedOk) {
+        localStorage.removeItem('biometric_' + activeWallet);
       }
     }
 
@@ -470,16 +480,29 @@
     // Don't offer if already enabled or previously declined
     if (localStorage.getItem('biometric_' + activeWallet) !== null) return;
     var ok = await showConfirm('Enable biometric unlock for this wallet?');
-    if (ok) {
-      try {
-        var saved = await __invoke('biometric_save', { wallet: activeWallet, passphrase: passphrase });
-        localStorage.setItem('biometric_' + activeWallet, saved ? '1' : '0');
-      } catch(e) {
-        localStorage.setItem('biometric_' + activeWallet, '0');
-      }
-    } else {
-      // Mark as declined so we don't ask again
+    if (!ok) {
+      // Mark as declined so we don't ask again every unlock.
       localStorage.setItem('biometric_' + activeWallet, '0');
+      return;
+    }
+    var wallet = activeWallet;
+    try {
+      var saved = await __invoke('biometric_save', { wallet: wallet, passphrase: passphrase });
+      if (saved) {
+        localStorage.setItem('biometric_' + wallet, '1');
+        showToast('Biometric unlock enabled');
+        // Refresh the Wallet Management page so the Enable/Disable buttons
+        // reflect the new state instead of still showing "Enable".
+        if (activeWallet === wallet) loadWalletInfo();
+      } else {
+        localStorage.setItem('biometric_' + wallet, '0');
+        await showAlert('Could not enable biometric unlock.');
+      }
+    } catch(e) {
+      var msg = (typeof e === 'string') ? e : (e && e.message) ? e.message : String(e);
+      console.error('biometric_save failed:', e);
+      localStorage.setItem('biometric_' + wallet, '0');
+      await showAlert('Could not enable biometric unlock: ' + msg);
     }
   }
 
@@ -3793,7 +3816,11 @@
         statusEl.innerHTML = '<div class="error-msg">Failed to save biometric key.</div>';
       }
     } catch(e) {
-      statusEl.innerHTML = '<div class="error-msg">' + esc(e.message || 'Failed') + '</div>';
+      // Tauri rejects with the raw Err value — a plain string when the Rust
+      // side returns Err(String), so e.message is undefined. Stringify safely.
+      var msg = (typeof e === 'string') ? e : (e && e.message) ? e.message : String(e);
+      console.error('biometric_save failed:', e);
+      statusEl.innerHTML = '<div class="error-msg">' + esc(msg) + '</div>';
     }
   });
 
@@ -4329,7 +4356,35 @@
 
   // ---- Init ----
 
-  showSetup();
+  // Desktop only: if the Rust side detected a legacy ~/.fbd install with
+  // existing wallets, offer to copy them over before fbd starts. The backend
+  // has deferred start_node() until resolve_migration() is called, so the
+  // normal "connecting to node..." retry loop in initLogin will happily wait.
+  (async function() {
+    var pending = null;
+    try {
+      pending = await __invoke('get_pending_migration');
+    } catch(e) {
+      // Command missing on mobile or pre-migration builds — just proceed.
+    }
+    if (pending) {
+      var plural = pending.wallet_count === 1 ? 'wallet' : 'wallets';
+      var msg = 'Found ' + pending.wallet_count + ' existing ' + plural +
+                ' from an older fbd install at:\n\n' + pending.source +
+                '\n\nCopy ' + (pending.wallet_count === 1 ? 'it' : 'them') +
+                ' into this wallet?';
+      var accept = await showConfirm(msg, { okText: 'Copy' });
+      try {
+        await __invoke('resolve_migration', { accept: accept });
+      } catch(e) {
+        await showAlert('Migration failed: ' + (e && e.message ? e.message : e) +
+                        '\n\nThe wallet will start without copying.');
+        // Best-effort: try to proceed anyway so the app isn't permanently stuck.
+        try { await __invoke('resolve_migration', { accept: false }); } catch(e2) {}
+      }
+    }
+    showSetup();
+  })();
 
   // SSE event stream for live updates from the node
   var _es = null;
