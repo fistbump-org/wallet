@@ -95,23 +95,26 @@ fn pid_path() -> PathBuf {
     settings_base_dir().join("fbd.pid")
 }
 
-fn cookie_path_for(network: &str) -> PathBuf {
+/// Data directory for the embedded fbd subprocess. Intentionally **not** fbd's
+/// default `~/.fbd` on desktop, so a standalone fbd install (possibly run with
+/// flags like `--index-tx` that change db schema) can't block the wallet from
+/// starting. Android and iOS already isolate themselves via their app sandboxes.
+fn fbd_data_dir() -> PathBuf {
     if cfg!(target_os = "android") {
-        let base = android_files_dir().join("fbd-data");
-        if network == "main" { base.join(".cookie") } else { base.join(network).join(".cookie") }
+        android_files_dir().join("fbd-data")
     } else if cfg!(target_os = "ios") {
-        let base = ios_documents_dir().join("fbd");
-        if network == "main" { base.join(".cookie") } else { base.join(network).join(".cookie") }
-    } else if cfg!(target_os = "windows") {
-        let local_app_data =
-            std::env::var("LOCALAPPDATA").unwrap_or_else(|_| "C:\\".to_string());
-        let base = PathBuf::from(local_app_data).join("fbd");
-        if network == "main" { base.join(".cookie") } else { base.join(network).join(".cookie") }
+        ios_documents_dir().join("fbd")
     } else {
-        let base = dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".fbd");
-        if network == "main" { base.join(".cookie") } else { base.join(network).join(".cookie") }
+        settings_base_dir().join("fbd-data")
+    }
+}
+
+fn cookie_path_for(network: &str) -> PathBuf {
+    let base = fbd_data_dir();
+    if network == "main" {
+        base.join(".cookie")
+    } else {
+        base.join(network).join(".cookie")
     }
 }
 
@@ -638,8 +641,13 @@ fn start_node(app_handle: tauri::AppHandle) {
 
     println!("[fistbump] starting fbd: {:?}", binary);
 
+    let data_dir = fbd_data_dir();
+    let _ = fs::create_dir_all(&data_dir);
+
     let mut cmd = Command::new(&binary);
     cmd.args(["--log-level", "debug", "--network", DEFAULT_NETWORK])
+        .arg("--datadir")
+        .arg(&data_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -662,12 +670,9 @@ fn start_node(app_handle: tauri::AppHandle) {
     #[cfg(target_os = "android")]
     {
         let files_dir = android_files_dir();
-        let data_dir = files_dir.join("fbd-data");
-        let _ = fs::create_dir_all(&data_dir);
         let lib_dir = find_native_lib_dir()
             .unwrap_or_else(|| PathBuf::from("/data/data/org.fistbump.wallet/lib"));
-        cmd.arg("--datadir").arg(&data_dir)
-            .env("HOME", &files_dir)
+        cmd.env("HOME", &files_dir)
             .env("TMPDIR", files_dir.join("tmp"))
             .env("LD_LIBRARY_PATH", &lib_dir);
         let _ = fs::create_dir_all(files_dir.join("tmp"));
