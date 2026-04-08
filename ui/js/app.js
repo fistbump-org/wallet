@@ -1635,6 +1635,7 @@
   document.getElementById('btn-show-send').addEventListener('click', () => openModal('send-modal'));
   function closeSendModal() {
     pendingPstx = null;
+    setSendMaxMode(false);
     document.getElementById('send-confirm').classList.add('hidden');
     document.getElementById('send-form').classList.remove('hidden');
     document.getElementById('send-status').innerHTML = '';
@@ -1791,6 +1792,10 @@
   });
 
   let pendingPstx = null;
+  // When true, createtx is called with subtractFee so the recipient receives
+  // (entered amount - fee) and the wallet is debited exactly the entered amount.
+  // Set by the Max button, cleared as soon as the user edits the amount.
+  let sendMaxMode = false;
 
   // Resolve a name or address to a sendable address.
   // Returns { address, name } where name is the input if it was a name, null if direct address.
@@ -1806,6 +1811,63 @@
     return { address: resolveRes.result, name: input };
   }
 
+  function showSendError(msg) {
+    var el = document.getElementById('send-status');
+    el.textContent = '';
+    var div = document.createElement('div');
+    div.className = 'error-msg';
+    div.textContent = msg;
+    el.appendChild(div);
+  }
+
+  function setSendMaxMode(on) {
+    sendMaxMode = on;
+    document.getElementById('send-max').classList.toggle('primary', on);
+  }
+
+  document.getElementById('send-max').addEventListener('click', async () => {
+    // Toggle off: clear the amount and deactivate.
+    if (sendMaxMode) {
+      document.getElementById('send-amount').value = '';
+      setSendMaxMode(false);
+      document.getElementById('send-status').textContent = '';
+      return;
+    }
+    // Toggle on: pull current spendable and fill the amount.
+    var b = _lastBalance;
+    if (!b) {
+      try {
+        var res = await rpc('getbalance');
+        if (res.error) throw new Error(res.error);
+        b = res.result;
+      } catch(e) {
+        showSendError('Could not fetch balance.');
+        return;
+      }
+    }
+    var spendable = b.spendable || 0;
+    if (spendable <= 0) {
+      showSendError('No spendable balance.');
+      return;
+    }
+    // Exact integer → decimal string conversion (avoids float precision loss).
+    var s = String(spendable);
+    var neg = false;
+    if (s.charAt(0) === '-') { neg = true; s = s.slice(1); }
+    while (s.length < 7) s = '0' + s;
+    var whole = s.slice(0, -6);
+    var frac = s.slice(-6).replace(/0+$/, '');
+    document.getElementById('send-amount').value =
+      (neg ? '-' : '') + (frac.length ? whole + '.' + frac : whole);
+    setSendMaxMode(true);
+    document.getElementById('send-status').textContent = '';
+  });
+
+  document.getElementById('send-amount').addEventListener('input', () => {
+    // Manual edit keeps the amount but exits max mode.
+    if (sendMaxMode) setSendMaxMode(false);
+  });
+
   document.getElementById('send-review').addEventListener('click', async () => {
     const input = document.getElementById('send-address').value.trim();
     const amountFBC = parseFloat(document.getElementById('send-amount').value);
@@ -1818,14 +1880,18 @@
     try {
       var resolved = await resolveRecipient(input);
       el.innerHTML = '<div class="modal-loading">Building transaction...</div>';
-      const createRes = await rpc('createtx', ['none', resolved.address, amountFBC]);
+      const createRes = await rpc('createtx', ['none', resolved.address, amountFBC, sendMaxMode]);
       if (createRes.error) throw new Error(createRes.error);
       pendingPstx = createRes.result.pstx;
 
       const decodeRes = await rpc('decoderawtransaction', [pendingPstx]);
       if (decodeRes.error) throw new Error(decodeRes.error);
       const fee = decodeRes.result.fee || 0;
-      const amountDoo = Math.round(amountFBC * 1000000);
+      const enteredDoo = Math.round(amountFBC * 1000000);
+      // In max mode: recipient gets entered - fee, wallet is debited entered.
+      // Normal mode: recipient gets entered, wallet is debited entered + fee.
+      const recipientDoo = sendMaxMode ? enteredDoo - fee : enteredDoo;
+      const totalDoo = sendMaxMode ? enteredDoo : enteredDoo + fee;
 
       var nameEl = document.getElementById('confirm-to-name');
       var addrEl = document.getElementById('confirm-to-address');
@@ -1838,9 +1904,9 @@
         nameEl.textContent = '';
         addrEl.textContent = resolved.address;
       }
-      document.getElementById('confirm-amount').innerHTML = formatFBC(amountDoo);
+      document.getElementById('confirm-amount').innerHTML = formatFBC(recipientDoo);
       document.getElementById('confirm-fee').innerHTML = formatFBC(fee);
-      document.getElementById('confirm-total').innerHTML = formatFBC(amountDoo + fee);
+      document.getElementById('confirm-total').innerHTML = formatFBC(totalDoo);
       document.getElementById('send-confirm-status').innerHTML = '';
       document.getElementById('send-form').classList.add('hidden');
       document.getElementById('send-confirm').classList.remove('hidden');
@@ -4300,7 +4366,10 @@
     }
   }
 
+  var _lastBalance = null;
+
   function updateBalance(b) {
+    _lastBalance = b;
     document.getElementById('balance').innerHTML =
       formatFBC(b.spendable);
     var items = '';
