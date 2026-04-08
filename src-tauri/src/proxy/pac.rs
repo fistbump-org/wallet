@@ -451,57 +451,132 @@ pub fn remove_pac() {
     println!("[fistbump] removed PAC proxy settings");
 }
 
-/// Collect all NSS database paths — standard + snap browser sandboxes.
+/// Collect every NSS database on the system that a browser might consult:
+/// - Chromium-family shared store at `~/.pki/nssdb`
+/// - Per-snap Chromium-family stores under `~/snap/<name>/current/.pki/nssdb`
+/// - Per-profile Firefox cert stores (regular + snap)
 #[cfg(target_os = "linux")]
 fn nss_db_paths() -> Vec<std::path::PathBuf> {
     let home = dirs::home_dir().unwrap_or_default();
-    let mut paths = vec![home.join(".pki/nssdb")];
+    let mut paths: Vec<std::path::PathBuf> = Vec::new();
 
-    // Snap browsers have their own home dirs
+    // Chromium-family: shared NSS store used by non-sandboxed Chrome/Chromium.
+    paths.push(home.join(".pki/nssdb"));
+
+    // Snap-confined browsers each see their own $HOME at ~/snap/<name>/current.
     let snap_dir = home.join("snap");
     if snap_dir.is_dir() {
-        // Common snap browser names
-        for name in &["chromium", "google-chrome", "brave", "opera"] {
-            let snap_nssdb = snap_dir.join(name).join("current/.pki/nssdb");
-            // Also check the snap's home mapping
-            let snap_home_nssdb = snap_dir.join(name).join("current/.pki/nssdb");
-            if snap_dir.join(name).exists() {
-                paths.push(snap_home_nssdb);
+        for name in &["chromium", "google-chrome", "brave", "opera", "vivaldi"] {
+            let snap_root = snap_dir.join(name);
+            if !snap_root.exists() {
+                continue;
             }
-            let _ = snap_nssdb; // same path, just for clarity
+            paths.push(snap_root.join("current/.pki/nssdb"));
         }
     }
+
+    // Firefox: per-profile NSS DBs from profiles.ini. Handles both regular and snap Firefox.
+    paths.extend(firefox_profile_nssdbs(&home.join(".mozilla/firefox")));
+    paths.extend(firefox_profile_nssdbs(
+        &home.join("snap/firefox/common/.mozilla/firefox"),
+    ));
 
     paths
 }
 
-/// Install cert into a single NSS database.
+/// Parse `<firefox_root>/profiles.ini` and return each profile directory that contains
+/// (or will contain) an NSS database. Empty if profiles.ini is missing.
+#[cfg(target_os = "linux")]
+fn firefox_profile_nssdbs(firefox_root: &Path) -> Vec<std::path::PathBuf> {
+    let profiles_ini = firefox_root.join("profiles.ini");
+    let Ok(content) = std::fs::read_to_string(&profiles_ini) else {
+        return Vec::new();
+    };
+
+    let mut out = Vec::new();
+    let mut in_profile = false;
+    let mut path: Option<String> = None;
+    let mut is_relative = true;
+
+    let flush = |in_profile: bool,
+                 path: &mut Option<String>,
+                 is_relative: &mut bool,
+                 out: &mut Vec<std::path::PathBuf>| {
+        if in_profile {
+            if let Some(p) = path.take() {
+                let full = if *is_relative {
+                    firefox_root.join(&p)
+                } else {
+                    std::path::PathBuf::from(&p)
+                };
+                if full.is_dir() {
+                    out.push(full);
+                }
+            }
+        }
+        *is_relative = true;
+    };
+
+    for line in content.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            flush(in_profile, &mut path, &mut is_relative, &mut out);
+            in_profile = line.to_ascii_lowercase().starts_with("[profile");
+            continue;
+        }
+        if !in_profile {
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("Path=") {
+            path = Some(rest.to_string());
+        } else if let Some(rest) = line.strip_prefix("IsRelative=") {
+            is_relative = rest.trim() == "1";
+        }
+    }
+    flush(in_profile, &mut path, &mut is_relative, &mut out);
+
+    out
+}
+
+/// Install cert into a single NSS database. Returns true on success.
 #[cfg(target_os = "linux")]
 fn install_to_nssdb(cert_path: &Path, nssdb_dir: &Path) -> bool {
     let nssdb = format!("sql:{}", nssdb_dir.display());
 
     let _ = std::fs::create_dir_all(nssdb_dir);
 
-    // Create NSS db if it doesn't exist
+    // Create NSS db if it doesn't exist. Firefox profile dirs already have cert9.db;
+    // chromium-family dirs (~/.pki/nssdb, snap) may not.
     if !nssdb_dir.join("cert9.db").exists() {
-        let _ = Command::new("certutil")
+        let out = Command::new("certutil")
             .args(["-N", "-d", &nssdb, "--empty-password"])
             .output();
+        if let Ok(o) = out {
+            if !o.status.success() {
+                let err = String::from_utf8_lossy(&o.stderr);
+                println!(
+                    "[fistbump] failed to create NSS db at {}: {}",
+                    nssdb_dir.display(),
+                    err.trim()
+                );
+                return false;
+            }
+        }
     }
 
-    // Remove existing entry if re-installing
+    // Remove existing entry if re-installing (ignore errors — cert may not exist yet).
     let _ = Command::new("certutil")
         .args(["-D", "-d", &nssdb, "-n", "Fistbump Local CA"])
         .output();
 
-    // Add cert
+    // Add cert. `C,,` = trusted root CA for SSL server auth (matches mkcert).
     let output = Command::new("certutil")
         .args([
             "-A",
             "-d",
             &nssdb,
             "-t",
-            "CT,c,c",
+            "C,,",
             "-n",
             "Fistbump Local CA",
             "-i",
@@ -516,7 +591,11 @@ fn install_to_nssdb(cert_path: &Path, nssdb_dir: &Path) -> bool {
         }
         Ok(o) => {
             let err = String::from_utf8_lossy(&o.stderr);
-            println!("[fistbump] NSS install failed ({}): {}", nssdb_dir.display(), err.trim());
+            println!(
+                "[fistbump] NSS install failed ({}): {}",
+                nssdb_dir.display(),
+                err.trim()
+            );
             false
         }
         Err(e) => {
@@ -552,45 +631,78 @@ pub fn is_ca_installed(cert_path: &Path) -> bool {
 
 #[cfg(target_os = "linux")]
 pub fn install_ca_cert(cert_path: &Path) {
-    // Ensure certutil is available — auto-install libnss3-tools if needed
+    // Ensure certutil is available — auto-install libnss3-tools if needed.
     if !ensure_certutil() {
-        println!("[fistbump] cannot install CA without certutil");
+        println!("[fistbump] cannot install CA without certutil — skipping NSS install");
         install_ca_system(cert_path);
         return;
     }
 
-    // Install to all NSS databases (standard + snap browsers)
-    for db in nss_db_paths() {
-        install_to_nssdb(cert_path, &db);
+    // Install to every NSS database we can find: chromium-family + Firefox per-profile.
+    let dbs = nss_db_paths();
+    let mut successes = 0usize;
+    let total = dbs.len();
+    for db in &dbs {
+        if install_to_nssdb(cert_path, db) {
+            successes += 1;
+        }
     }
 
-    // Also install system-wide
+    if successes == 0 {
+        println!(
+            "[fistbump] WARNING: CA was not installed into any NSS database. \
+             Browsers will show SSL errors for fistbump names. \
+             Checked {} path(s).",
+            total
+        );
+    } else {
+        println!(
+            "[fistbump] installed CA into {}/{} NSS database(s). \
+             Restart any open browsers for the trust to take effect.",
+            successes, total
+        );
+    }
+
+    // Also install system-wide (covers curl, wget, Electron apps, etc.).
     install_ca_system(cert_path);
 }
 
-/// Install CA cert system-wide via pkexec (covers OpenSSL-based apps, curl, etc.)
+/// Install CA cert system-wide via pkexec (covers OpenSSL-based apps, curl, etc.).
+/// Always runs `update-ca-certificates` so an already-copied cert still gets registered.
 #[cfg(target_os = "linux")]
 fn install_ca_system(cert_path: &Path) {
     let sys_dest = Path::new("/usr/local/share/ca-certificates/fistbump-local-ca.crt");
-    if sys_dest.exists() {
-        return;
-    }
-    // Single pkexec call: copy cert and update store
-    let script = format!(
-        "cp '{}' '{}' && update-ca-certificates",
-        cert_path.display(),
-        sys_dest.display()
-    );
-    let output = Command::new("pkexec")
-        .args(["sh", "-c", &script])
-        .output();
+
+    // If the destination already has identical contents, we still need to make sure
+    // update-ca-certificates has been run at least once.
+    let already_matches = match (std::fs::read(cert_path), std::fs::read(sys_dest)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    };
+
+    let script = if already_matches {
+        "update-ca-certificates".to_string()
+    } else {
+        format!(
+            "cp '{}' '{}' && update-ca-certificates",
+            cert_path.display(),
+            sys_dest.display()
+        )
+    };
+
+    let output = Command::new("pkexec").args(["sh", "-c", &script]).output();
     match output {
         Ok(o) if o.status.success() => {
             println!("[fistbump] installed root CA to system certificate store");
         }
         Ok(o) => {
             let err = String::from_utf8_lossy(&o.stderr);
-            println!("[fistbump] system CA install failed: {}", err.trim());
+            // pkexec exits 126/127 if the user cancels the prompt — don't flood the log.
+            if o.status.code() == Some(126) || o.status.code() == Some(127) {
+                println!("[fistbump] system CA install cancelled by user");
+            } else {
+                println!("[fistbump] system CA install failed: {}", err.trim());
+            }
         }
         Err(e) => {
             println!("[fistbump] pkexec error for system CA: {}", e);
