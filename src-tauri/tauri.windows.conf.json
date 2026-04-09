@@ -1,0 +1,8 @@
+{
+  "bundle": {
+    "resources": {
+      "resources/fistbump-bridge": null,
+      "resources/fistbump-bridge.exe": "fistbump-bridge.exe"
+    }
+  }
+}

@@ -5,16 +5,21 @@
 //!
 //! Lifecycle:
 //!   1. Chrome calls `chrome.runtime.connectNative('org.fistbump.wallet')`.
-//!   2. Chrome reads the host JSON manifest at
-//!      `~/Library/Application Support/<browser>/NativeMessagingHosts/...`,
-//!      verifies our extension ID against `allowed_origins`, then spawns
-//!      this binary with stdio piped.
-//!   3. We try to connect to `~/.fistbump/extension.sock`. If the wallet
-//!      isn't running, the socket file isn't there — we `open` the bundled
-//!      .app and poll until the socket appears.
+//!   2. Chrome reads the host JSON manifest at the platform-specific
+//!      native messaging host location
+//!      (`~/Library/Application Support/<browser>/NativeMessagingHosts/…`
+//!      on macOS, `~/.config/<browser>/NativeMessagingHosts/…` on Linux,
+//!      registry keys under `HKCU\Software\…\NativeMessagingHosts\…` on
+//!      Windows), verifies our extension ID against `allowed_origins`,
+//!      then spawns this binary with stdio piped.
+//!   3. We try to connect to the wallet's local socket. On Unix it's
+//!      `~/.fistbump/extension.sock` (Unix domain socket); on Windows it's
+//!      the named pipe `\\.\pipe\org.fistbump.wallet.extension`. If the
+//!      wallet isn't running, we launch it (platform-specific) and poll
+//!      until the socket appears.
 //!   4. Then we proxy bytes back and forth: every native messaging frame
 //!      from Chrome (4-byte little-endian length prefix + JSON body) is
-//!      forwarded as-is to the wallet over the Unix socket, and every
+//!      forwarded as-is to the wallet over the local socket, and every
 //!      response frame from the wallet is written straight back to Chrome
 //!      stdout. The wire formats are identical so we never have to parse.
 //!   5. Loop until either side hangs up, then exit.
@@ -23,54 +28,167 @@
 //!   - Chrome verifies the calling extension's ID before spawning us, so
 //!     a random local extension can't impersonate the Fistbump extension.
 //!   - The Unix socket lives at 0600 in the user's home, so other users
-//!     on the same machine can't read it.
+//!     on the same machine can't read it. On Windows, the default named
+//!     pipe ACL restricts the pipe to the creating user's session.
 //!   - We don't authenticate the *socket* connection — same-user processes
 //!     can in principle still connect to it directly, bypassing the bridge.
 //!     That's the same threat-model trade-off the wallet makes for everything
 //!     else in `~/.fistbump/`.
 
+use interprocess::local_socket::{
+    prelude::*, GenericFilePath, GenericNamespaced, Name, Stream,
+};
 use std::io::{Read, Write};
-use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-/// Where the wallet binds its Unix socket. Mirrored on the wallet side.
+/// Build the `Name` we pass to `Stream::connect`. Matches the derivation
+/// in the wallet's `proxy::extension::ipc_socket_name` — Windows uses a
+/// named pipe by a fixed name, Unix uses the on-disk socket path.
+fn socket_name() -> std::io::Result<Name<'static>> {
+    if GenericNamespaced::is_supported() {
+        "org.fistbump.wallet.extension".to_ns_name::<GenericNamespaced>()
+    } else {
+        #[cfg(unix)]
+        {
+            socket_path()
+                .into_os_string()
+                .to_fs_name::<GenericFilePath>()
+        }
+        #[cfg(not(unix))]
+        {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "no supported local socket namespace on this target",
+            ))
+        }
+    }
+}
+
+/// On Unix, where the wallet binds its Unix domain socket. Mirrored on
+/// the wallet side.
+#[cfg(unix)]
 fn socket_path() -> PathBuf {
-    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default();
     home.join(".fistbump").join("extension.sock")
 }
 
-/// Walk up from this binary's location to find the .app bundle root, so we
-/// can `open` it and let macOS launch the wallet. We're at
-/// `<App>/Contents/Resources/fistbump-bridge`, so `../..` is the bundle.
-fn enclosing_app_bundle() -> Option<PathBuf> {
+/// Try to connect to the wallet's IPC socket. Returns immediately on success.
+fn try_connect() -> Option<Stream> {
+    let name = socket_name().ok()?;
+    Stream::connect(name).ok()
+}
+
+/// Launch the wallet when its socket isn't up yet. Platform-specific:
+///
+///   - **macOS**: `open Fistbump.app`. The bridge lives at
+///     `<App>/Contents/Resources/fistbump-bridge`, so we walk up to the
+///     `.app` bundle and hand it to `open`.
+///   - **Linux**: spawn the wallet binary directly. The bridge and the
+///     main binary are installed side-by-side by the Tauri AppImage/deb
+///     bundler, so the wallet exe is in the same dir as the bridge (or
+///     one level up depending on packaging). We try both.
+///   - **Windows**: spawn `fistbump.exe` directly from the install dir.
+///     Tauri's Windows bundle puts resources under `resources\` with the
+///     wallet exe at the install-dir root, so we walk up one level.
+///
+/// Best-effort: any error just means we'll keep failing to connect and
+/// eventually return an error to Chrome. We never panic — the worst
+/// outcome is the dApp gets a clean `{"error": "…"}` response.
+fn launch_wallet() {
+    let Some(exe) = wallet_launch_target() else {
+        return;
+    };
+
+    #[cfg(target_os = "macos")]
+    {
+        // On macOS we launch the `.app` bundle via `open` rather than
+        // directly executing the binary, so Launch Services handles the
+        // bundle activation correctly (icon bounce, Dock entry, etc).
+        let _ = std::process::Command::new("open").arg(&exe).status();
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        // Linux / Windows: spawn the wallet binary directly and detach
+        // so we don't block on its lifetime.
+        let _ = std::process::Command::new(&exe).spawn();
+    }
+}
+
+/// Figure out what to pass to the platform-specific launch command.
+/// Returns an absolute path to either the wallet binary (Linux/Windows)
+/// or the `.app` bundle root (macOS).
+fn wallet_launch_target() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
-    let resources = exe.parent()?;          // <App>/Contents/Resources
-    let contents = resources.parent()?;     // <App>/Contents
-    let app = contents.parent()?;           // <App>
-    if app.extension().and_then(|e| e.to_str()) == Some("app") {
-        Some(app.to_path_buf())
-    } else {
+
+    #[cfg(target_os = "macos")]
+    {
+        // Bridge is at <App>/Contents/Resources/fistbump-bridge, so the
+        // .app bundle is two directories up.
+        let resources = exe.parent()?;
+        let contents = resources.parent()?;
+        let app = contents.parent()?;
+        if app.extension().and_then(|e| e.to_str()) == Some("app") {
+            return Some(app.to_path_buf());
+        }
+        None
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        // Tauri's Linux bundles (deb, AppImage) lay out the bridge
+        // either in the same dir as the main binary or in a `resources`
+        // subdir. Try both so we cover AppImage (flat layout) and deb
+        // (/usr/lib/fistbump/resources/ style).
+        let dir = exe.parent()?;
+        let candidate = dir.join("fistbump");
+        if candidate.exists() {
+            return Some(candidate);
+        }
+        // Walk up one level and retry (covers `…/resources/bridge` →
+        // `…/fistbump`).
+        let parent = dir.parent()?;
+        let candidate = parent.join("fistbump");
+        if candidate.exists() {
+            return Some(candidate);
+        }
+        None
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        // Tauri's Windows bundle puts fistbump-bridge.exe under
+        // `<install>\resources\` with the wallet at `<install>\fistbump.exe`.
+        let resources = exe.parent()?;
+        let install = resources.parent()?;
+        let candidate = install.join("fistbump.exe");
+        if candidate.exists() {
+            return Some(candidate);
+        }
+        // Fallback: sibling layout, in case the bridge ends up in the
+        // install dir itself.
+        let sibling = resources.join("fistbump.exe");
+        if sibling.exists() {
+            return Some(sibling);
+        }
+        None
+    }
+
+    #[cfg(not(any(
+        target_os = "macos",
+        target_os = "linux",
+        target_os = "windows"
+    )))]
+    {
         None
     }
 }
 
-/// Try to connect to the wallet's IPC socket. Returns immediately on success.
-fn try_connect() -> Option<UnixStream> {
-    UnixStream::connect(&socket_path()).ok()
-}
-
-/// Tell macOS to launch the wallet. Best-effort: any error means we just won't
-/// have a socket to talk to and the next `try_connect` will keep failing.
-fn launch_wallet() {
-    let Some(app) = enclosing_app_bundle() else {
-        return;
-    };
-    let _ = std::process::Command::new("open").arg(&app).status();
-}
-
 /// Poll until either we connect to the socket or `timeout` elapses.
-fn wait_for_socket(timeout: Duration) -> Option<UnixStream> {
+fn wait_for_socket(timeout: Duration) -> Option<Stream> {
     let interval = Duration::from_millis(100);
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
@@ -168,26 +286,36 @@ fn main() {
         }
     };
 
-    // Best-effort: don't block forever if either side stalls. Each native
-    // messaging exchange is small and quick, but the wallet may take a few
-    // seconds to pop a modal — give it room.
-    let _ = socket.set_read_timeout(Some(Duration::from_secs(120)));
-    let _ = socket.set_write_timeout(Some(Duration::from_secs(10)));
-
     // Forward the buffered first frame to the wallet and pipe the response
     // back to Chrome, then enter the general relay loop for any follow-ups.
-    if socket.write_all(&len_buf).is_err() { return; }
-    if socket.write_all(&first_msg).is_err() { return; }
-    if socket.flush().is_err() { return; }
+    if socket.write_all(&len_buf).is_err() {
+        return;
+    }
+    if socket.write_all(&first_msg).is_err() {
+        return;
+    }
+    if socket.flush().is_err() {
+        return;
+    }
 
     let mut resp_len_buf = [0u8; 4];
-    if socket.read_exact(&mut resp_len_buf).is_err() { return; }
+    if socket.read_exact(&mut resp_len_buf).is_err() {
+        return;
+    }
     let resp_len = u32::from_le_bytes(resp_len_buf) as usize;
-    if resp_len > 1024 * 1024 { return; }
+    if resp_len > 1024 * 1024 {
+        return;
+    }
     let mut resp = vec![0u8; resp_len];
-    if socket.read_exact(&mut resp).is_err() { return; }
-    if stdout.write_all(&resp_len_buf).is_err() { return; }
-    if stdout.write_all(&resp).is_err() { return; }
+    if socket.read_exact(&mut resp).is_err() {
+        return;
+    }
+    if stdout.write_all(&resp_len_buf).is_err() {
+        return;
+    }
+    if stdout.write_all(&resp).is_err() {
+        return;
+    }
     let _ = stdout.flush();
 
     if let Err(e) = relay_loop(&mut socket) {
@@ -215,7 +343,7 @@ fn bytes_contains(haystack: &[u8], needle: &[u8]) -> bool {
 
 /// Forward native messaging frames between Chrome stdio and the wallet socket
 /// in both directions. Returns when either side closes or we hit an I/O error.
-fn relay_loop(socket: &mut UnixStream) -> std::io::Result<()> {
+fn relay_loop(socket: &mut Stream) -> std::io::Result<()> {
     let mut stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
 

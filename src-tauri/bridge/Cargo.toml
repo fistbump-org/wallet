@@ -5,11 +5,17 @@ edition = "2021"
 publish = false
 
 # The bridge is a tiny standalone binary that proxies Chrome native messaging
-# stdio to the wallet's Unix socket. We deliberately keep its dependency
-# footprint to `std` only so the resulting binary is small (~450 KB) and
-# fast to spawn — Chrome creates a fresh process per `connectNative` call.
+# stdio to the wallet's IPC socket. We keep its dependency footprint minimal
+# so the resulting binary is small and fast to spawn — Chrome creates a
+# fresh process per `connectNative` call. `interprocess` is the only
+# non-std dep, and it gives us a single cross-platform local-socket API
+# (Unix domain sockets on Unix, named pipes on Windows) with no async
+# runtime to pull in.
 # Living in its own crate also keeps Tauri's bundler from picking it up as
 # an additional binary of the wallet package.
+
+[dependencies]
+interprocess = "2"
 
 [[bin]]
 name = "fistbump-bridge"

@@ -567,27 +567,42 @@ const EXTENSION_ID: &str = "epflhbnbnmhicfmiepfhbldfchjoojmb";
 /// call uses this exact string; the JSON file we write must match.
 const NM_HOST_NAME: &str = "org.fistbump.wallet";
 
-/// On desktop, write the native-messaging host JSON manifest into every
-/// Chromium-family browser's `NativeMessagingHosts/` directory we can find.
-/// The manifest points at the bundled `fistbump-bridge` binary, which
-/// stdio-forwards Chrome's native messaging frames to our Unix socket.
+/// On desktop, register this wallet's `fistbump-bridge` binary as the
+/// native messaging host for the browser extension in every
+/// Chromium-family browser we know about.
+///
+/// This is platform-specific:
+///   - **macOS + Linux**: drop a JSON manifest into each browser's
+///     per-user `NativeMessagingHosts/` directory under
+///     `~/Library/Application Support/…` (macOS) or `~/.config/…` (Linux).
+///     The file's name is `org.fistbump.wallet.json` and its contents
+///     point at the bundled bridge binary's absolute path.
+///   - **Windows**: Chrome doesn't look at `NativeMessagingHosts/`
+///     directories on Windows. Instead it reads a per-user registry key
+///     under `HKCU\Software\<vendor>\<browser>\NativeMessagingHosts\<name>`
+///     whose default value is the absolute path to a manifest JSON
+///     somewhere on disk. We write the JSON once to `%APPDATA%\Fistbump\`
+///     and then create the registry entries for each known browser.
 ///
 /// Idempotent and best-effort: if a browser isn't installed we skip it,
 /// and any individual write failure is logged but doesn't fail startup.
 /// In dev mode (`tauri dev`) the bundled bridge binary doesn't exist,
 /// so we no-op silently.
 pub fn install_native_messaging_host(app: &AppHandle) {
-    let Some(bridge) = app
-        .path()
-        .resource_dir()
-        .ok()
-        .map(|d| d.join("fistbump-bridge"))
-    else {
+    let Some(resource_dir) = app.path().resource_dir().ok() else {
         return;
     };
+    // Tauri bundles the bridge under a platform-specific filename —
+    // `.exe` on Windows, no extension elsewhere. The resource dir is
+    // the right place on every desktop platform.
+    #[cfg(target_os = "windows")]
+    let bridge = resource_dir.join("fistbump-bridge.exe");
+    #[cfg(not(target_os = "windows"))]
+    let bridge = resource_dir.join("fistbump-bridge");
+
     if !bridge.exists() {
         // Dev build — no bundled resources. Native messaging only works
-        // when the user is running the bundled .app.
+        // when the user is running the bundled app.
         return;
     }
 
@@ -614,13 +629,22 @@ pub fn install_native_messaging_host(app: &AppHandle) {
         }
     };
 
-    let Some(home) = dirs::home_dir() else {
-        return;
-    };
+    #[cfg(target_os = "macos")]
+    install_host_json_unix(&manifest_str, &macos_browser_dirs());
 
-    // Per-user NativeMessagingHosts directories for the Chromium-family browsers
-    // we know about. Order doesn't matter — each browser reads its own.
-    let browsers: &[(&str, &str)] = &[
+    #[cfg(target_os = "linux")]
+    install_host_json_unix(&manifest_str, &linux_browser_dirs());
+
+    #[cfg(target_os = "windows")]
+    install_host_windows(&manifest_str);
+}
+
+/// Per-user browser data dirs on macOS whose `NativeMessagingHosts/`
+/// subdir Chrome + friends read. Order doesn't matter — each browser
+/// reads its own.
+#[cfg(target_os = "macos")]
+fn macos_browser_dirs() -> Vec<(&'static str, &'static str)> {
+    vec![
         ("Library/Application Support/Google/Chrome", "Chrome"),
         ("Library/Application Support/Chromium", "Chromium"),
         (
@@ -629,11 +653,33 @@ pub fn install_native_messaging_host(app: &AppHandle) {
         ),
         ("Library/Application Support/Microsoft Edge", "Edge"),
         ("Library/Application Support/Arc/User Data", "Arc"),
-        (
-            "Library/Application Support/Vivaldi",
-            "Vivaldi",
-        ),
-    ];
+        ("Library/Application Support/Vivaldi", "Vivaldi"),
+    ]
+}
+
+/// Per-user browser data dirs on Linux. Chrome et al use `~/.config/<name>/`
+/// as their profile root and expect native-messaging manifests at
+/// `<profile root>/NativeMessagingHosts/<host-name>.json`. Arc doesn't
+/// exist on Linux, so it's absent here.
+#[cfg(target_os = "linux")]
+fn linux_browser_dirs() -> Vec<(&'static str, &'static str)> {
+    vec![
+        (".config/google-chrome", "Chrome"),
+        (".config/chromium", "Chromium"),
+        (".config/BraveSoftware/Brave-Browser", "Brave"),
+        (".config/microsoft-edge", "Edge"),
+        (".config/vivaldi", "Vivaldi"),
+    ]
+}
+
+/// Drop the manifest JSON into each browser's `NativeMessagingHosts/`
+/// directory. Shared between macOS and Linux since the mechanism is
+/// identical — they only differ in the browser-profile base paths.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn install_host_json_unix(manifest_str: &str, browsers: &[(&str, &str)]) {
+    let Some(home) = dirs::home_dir() else {
+        return;
+    };
 
     let filename = format!("{}.json", NM_HOST_NAME);
     // The previous build of the wallet shipped a different host name
@@ -643,7 +689,6 @@ pub fn install_native_messaging_host(app: &AppHandle) {
     // pointing at a script we no longer ship.
     let legacy_filename = "org.fistbump.wallet.launcher.json";
 
-    let mut wrote_any = false;
     for (subpath, name) in browsers {
         let browser_dir = home.join(subpath);
         if !browser_dir.exists() {
@@ -651,7 +696,10 @@ pub fn install_native_messaging_host(app: &AppHandle) {
         }
         let nm_dir = browser_dir.join("NativeMessagingHosts");
         if let Err(e) = std::fs::create_dir_all(&nm_dir) {
-            println!("[fistbump] native host install: mkdir {} failed: {}", name, e);
+            println!(
+                "[fistbump] native host install: mkdir {} failed: {}",
+                name, e
+            );
             continue;
         }
 
@@ -669,50 +717,190 @@ pub fn install_native_messaging_host(app: &AppHandle) {
                 continue;
             }
         }
-        match std::fs::write(&target, &manifest_str) {
+        match std::fs::write(&target, manifest_str) {
             Ok(()) => {
                 println!("[fistbump] installed native messaging host for {}", name);
-                wrote_any = true;
             }
             Err(e) => {
-                println!("[fistbump] native host install: write {} failed: {}", name, e);
+                println!(
+                    "[fistbump] native host install: write {} failed: {}",
+                    name, e
+                );
             }
         }
     }
-    let _ = wrote_any;
 }
 
-// ── Unix domain socket transport (preferred) ──
+/// Install the native messaging host on Windows. Two-step:
+///
+///   1. Write the manifest JSON to `%APPDATA%\Fistbump\org.fistbump.wallet.json`
+///      (a stable per-user location the wallet owns).
+///   2. For each Chromium-family browser, create
+///      `HKCU\Software\<vendor>\<browser>\NativeMessagingHosts\org.fistbump.wallet`
+///      with the default value set to the manifest path. Chrome reads
+///      this registry value at `connectNative` time to find the manifest.
+///
+/// Idempotent: we rewrite the JSON only if it changed, and `create_subkey`
+/// is a no-op if the key already exists.
+#[cfg(target_os = "windows")]
+fn install_host_windows(manifest_str: &str) {
+    use winreg::enums::HKEY_CURRENT_USER;
+    use winreg::RegKey;
+
+    // Step 1: write the manifest file.
+    let Some(appdata) = dirs::config_dir() else {
+        // dirs::config_dir on Windows returns %APPDATA%\Roaming.
+        println!("[fistbump] native host install: no APPDATA available");
+        return;
+    };
+    let wallet_cfg = appdata.join("Fistbump");
+    if let Err(e) = std::fs::create_dir_all(&wallet_cfg) {
+        println!("[fistbump] native host install: mkdir {} failed: {}",
+                 wallet_cfg.display(), e);
+        return;
+    }
+    let manifest_path = wallet_cfg.join(format!("{}.json", NM_HOST_NAME));
+    let write_needed = match std::fs::read_to_string(&manifest_path) {
+        Ok(existing) => existing != manifest_str,
+        Err(_) => true,
+    };
+    if write_needed {
+        if let Err(e) = std::fs::write(&manifest_path, manifest_str) {
+            println!(
+                "[fistbump] native host install: write {} failed: {}",
+                manifest_path.display(),
+                e
+            );
+            return;
+        }
+    }
+    let manifest_path_str = manifest_path.display().to_string();
+
+    // Step 2: registry entries per browser. Each Chromium-family browser
+    // has its own (vendor, browser) pair under HKCU\Software — Chrome
+    // is `Google\Chrome`, Edge is `Microsoft\Edge`, etc.
+    let browsers: &[(&str, &str)] = &[
+        ("Software\\Google\\Chrome", "Chrome"),
+        ("Software\\Chromium", "Chromium"),
+        ("Software\\BraveSoftware\\Brave-Browser", "Brave"),
+        ("Software\\Microsoft\\Edge", "Edge"),
+        ("Software\\Vivaldi", "Vivaldi"),
+    ];
+
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    for (browser_key, name) in browsers {
+        let host_key_path =
+            format!("{}\\NativeMessagingHosts\\{}", browser_key, NM_HOST_NAME);
+        // create_subkey creates (or opens) the key, and is a no-op if it
+        // already exists — so this is safe to run on every launch.
+        let (host_key, _disposition) = match hkcu.create_subkey(&host_key_path) {
+            Ok(k) => k,
+            Err(e) => {
+                println!(
+                    "[fistbump] native host install: create key {} failed: {}",
+                    host_key_path, e
+                );
+                continue;
+            }
+        };
+        // The default (unnamed) value is what Chrome reads — it should
+        // be the manifest path.
+        if let Err(e) = host_key.set_value("", &manifest_path_str) {
+            println!(
+                "[fistbump] native host install: set {} value failed: {}",
+                name, e
+            );
+            continue;
+        }
+        println!("[fistbump] installed native messaging host for {}", name);
+    }
+}
+
+// ── Cross-platform local-socket transport ──
 //
 // The browser extension talks to us through a small `fistbump-bridge`
 // binary that Chrome spawns via native messaging. The bridge does
-// stdio↔Unix-socket forwarding, so all the actual request handling lives
-// here on the wallet side. Wire format on both sides of the bridge is
-// identical to Chrome's native messaging frame format: a 4-byte
-// little-endian length prefix followed by a JSON body.
+// stdio↔local-socket forwarding, so all the actual request handling
+// lives here on the wallet side. Wire format on both sides of the
+// bridge is identical to Chrome's native messaging frame format: a
+// 4-byte little-endian length prefix followed by a JSON body.
+//
+// On Unix we use a Unix domain socket at `~/.fistbump/extension.sock`
+// (0600); on Windows we use a named pipe at
+// `\\.\pipe\org.fistbump.wallet.extension`. Both are exposed through
+// `interprocess::local_socket` as a single blocking Read+Write
+// `Stream` API so the transport code doesn't have to fork. The bridge
+// binary uses the same `interprocess` name derivation so both ends
+// agree on where to rendezvous without any config plumbing.
 
-/// Where the Unix socket lives. Inside `~/.fistbump/` so it shares the
-/// 0700 permissions of the rest of the wallet's data dir, and so the
-/// bridge binary can find it deterministically without configuration.
+/// On Unix, where the Unix domain socket lives on disk. Callers need
+/// this to clean up stale socket files before binding, and to chmod
+/// after binding. The bridge side derives the same path from $HOME.
+#[cfg(unix)]
 fn ipc_socket_path() -> std::path::PathBuf {
     settings_dir().join("extension.sock")
 }
 
-/// Bind the Unix socket and start accepting connections in a background
-/// thread. Each client gets its own thread; blocking inside a request
-/// (e.g. waiting for the user to approve a modal) is fine because no
-/// other clients are stuck behind it.
-pub fn start_ipc_listener(app: AppHandle) {
-    use std::os::unix::net::UnixListener;
+/// Build the cross-platform `Name` we use for both bind and connect.
+/// On Windows, interprocess resolves `"org.fistbump.wallet.extension"`
+/// to the named pipe `\\.\pipe\org.fistbump.wallet.extension`; on Unix
+/// we point it at the existing `~/.fistbump/extension.sock` so the
+/// file-system layout and permissions carry over unchanged from the
+/// macOS-only version.
+fn ipc_socket_name() -> std::io::Result<interprocess::local_socket::Name<'static>> {
+    use interprocess::local_socket::{prelude::*, GenericFilePath, GenericNamespaced};
 
-    let socket_path = ipc_socket_path();
-    if let Some(parent) = socket_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+    if GenericNamespaced::is_supported() {
+        "org.fistbump.wallet.extension".to_ns_name::<GenericNamespaced>()
+    } else {
+        #[cfg(unix)]
+        {
+            ipc_socket_path()
+                .into_os_string()
+                .to_fs_name::<GenericFilePath>()
+        }
+        #[cfg(not(unix))]
+        {
+            // Shouldn't be reachable — if GenericNamespaced isn't
+            // supported we're on Unix. Guard anyway so non-unix
+            // non-windows targets still compile.
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "no supported local socket namespace on this target",
+            ))
+        }
     }
-    // Clean up any leftover socket from a previous (or crashed) run.
-    let _ = std::fs::remove_file(&socket_path);
+}
 
-    let listener = match UnixListener::bind(&socket_path) {
+/// Bind the local socket and start accepting connections in a
+/// background thread. Each client gets its own thread; blocking inside
+/// a request (e.g. waiting for the user to approve a modal) is fine
+/// because no other clients are stuck behind it.
+pub fn start_ipc_listener(app: AppHandle) {
+    use interprocess::local_socket::{prelude::*, ListenerOptions};
+
+    // On Unix, make sure the parent dir exists and clean up any
+    // leftover socket file from a previous (or crashed) run — Unix
+    // domain sockets don't auto-cleanup on process exit, so a stale
+    // file would otherwise cause bind to fail with AddrInUse.
+    #[cfg(unix)]
+    {
+        let socket_path = ipc_socket_path();
+        if let Some(parent) = socket_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::remove_file(&socket_path);
+    }
+
+    let name = match ipc_socket_name() {
+        Ok(n) => n,
+        Err(e) => {
+            println!("[fistbump] extension IPC name build failed: {}", e);
+            return;
+        }
+    };
+
+    let listener = match ListenerOptions::new().name(name).create_sync() {
         Ok(l) => l,
         Err(e) => {
             println!("[fistbump] extension IPC bind failed: {}", e);
@@ -720,15 +908,25 @@ pub fn start_ipc_listener(app: AppHandle) {
         }
     };
 
+    // On Unix, tighten the socket file to 0600 so other users on the
+    // same machine can't connect. No-op on Windows — named pipe ACLs
+    // are handled separately, and by default are only accessible to
+    // the creating user's session.
+    #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600));
+        let socket_path = ipc_socket_path();
+        let _ =
+            std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600));
+        println!(
+            "[fistbump] extension IPC listening on {}",
+            socket_path.display()
+        );
     }
-
-    println!(
-        "[fistbump] extension IPC listening on {}",
-        socket_path.display()
-    );
+    #[cfg(not(unix))]
+    {
+        println!("[fistbump] extension IPC listening on named pipe org.fistbump.wallet.extension");
+    }
 
     std::thread::spawn(move || {
         for stream in listener.incoming() {
@@ -759,7 +957,7 @@ pub fn start_ipc_listener(app: AppHandle) {
 /// Read length-prefixed JSON frames from `stream`, dispatch them, and
 /// write responses back. Returns when the client disconnects.
 fn handle_ipc_connection(
-    mut stream: std::os::unix::net::UnixStream,
+    mut stream: interprocess::local_socket::Stream,
     app: &AppHandle,
 ) -> std::io::Result<()> {
     loop {
