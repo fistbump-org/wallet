@@ -5,7 +5,7 @@
   "build": {
     "frontendDist": "../ui",
     "beforeDevCommand": "node -e \"['src-tauri/target/debug/fbd','src-tauri/target/debug/fbd.exe'].forEach(f=>{try{require('fs').unlinkSync(f)}catch{}})\"",
-    "beforeBuildCommand": "node -e \"['src-tauri/target/release/fbd','src-tauri/target/release/fbd.exe','src-tauri/target/universal-apple-darwin/release/fbd'].forEach(f=>{try{require('fs').unlinkSync(f)}catch{}})\""
+    "beforeBuildCommand": "sh src-tauri/build-bridge.sh && node -e \"['src-tauri/target/release/fbd','src-tauri/target/release/fbd.exe','src-tauri/target/universal-apple-darwin/release/fbd'].forEach(f=>{try{require('fs').unlinkSync(f)}catch{}})\""
   },
   "app": {
     "windows": [
@@ -34,11 +34,21 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "resources": {
+      "resources/fistbump-bridge": "fistbump-bridge"
+    },
     "iOS": {
       "developmentTeam": "5JAGPKCDD7"
     },
     "macOS": {
       "entitlements": "Entitlements.plist"
+    }
+  },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["fistbump"]
+      }
     }
   }
 }

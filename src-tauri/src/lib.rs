@@ -18,14 +18,15 @@ const MAX_LOG_LINES: usize = 500;
 
 // ── Network Defaults ──
 
-const DEFAULT_NETWORK: &str = env!("FISTBUMP_NETWORK");
+pub(crate) const DEFAULT_NETWORK: &str = env!("FISTBUMP_NETWORK");
 
-struct NetworkPorts {
-    rpc: u16,
-    dns: u16,
+pub(crate) struct NetworkPorts {
+    pub rpc: u16,
+    #[allow(dead_code)]
+    pub dns: u16,
 }
 
-fn network_ports(network: &str) -> NetworkPorts {
+pub(crate) fn network_ports(network: &str) -> NetworkPorts {
     match network {
         "main"    => NetworkPorts { rpc: 32869, dns: 32870 },
         "testnet" => NetworkPorts { rpc: 42869, dns: 42870 },
@@ -55,6 +56,11 @@ struct Settings {
     mining_enabled: bool,
     #[serde(default, rename = "minerThreads")]
     miner_threads: u32,
+    /// Web origins that have been granted permission to talk to this wallet
+    /// via the browser extension. Persisted so we don't re-prompt the same
+    /// dApp on every connect.
+    #[serde(default, rename = "approvedOrigins")]
+    approved_origins: Vec<String>,
 }
 
 /// Description of a legacy fbd data directory that has wallet files we could
@@ -78,6 +84,11 @@ pub struct AppState {
     /// `resolve_migration` is called.
     #[cfg(desktop)]
     pending_migration: Mutex<Option<MigrationCandidate>>,
+    /// Name of the wallet the user currently has open in the UI. Synced
+    /// from JS via `set_active_wallet`. The browser-extension bridge needs
+    /// this to know which wallet to query for the receive address.
+    #[cfg(desktop)]
+    pub(crate) active_wallet: Mutex<Option<String>>,
 }
 
 fn settings_base_dir() -> PathBuf {
@@ -92,7 +103,7 @@ fn settings_base_dir() -> PathBuf {
     }
 }
 
-fn settings_dir() -> PathBuf {
+pub(crate) fn settings_dir() -> PathBuf {
     let base = settings_base_dir();
     if DEFAULT_NETWORK == "main" { base } else { base.join(DEFAULT_NETWORK) }
 }
@@ -127,7 +138,7 @@ fn fbd_data_dir() -> PathBuf {
     }
 }
 
-fn cookie_path_for(network: &str) -> PathBuf {
+pub(crate) fn cookie_path_for(network: &str) -> PathBuf {
     let base = fbd_data_dir();
     if network == "main" {
         base.join(".cookie")
@@ -402,6 +413,7 @@ fn open_external(url: String) -> Result<(), String> {
 // ── Browser ──
 
 /// Start the DANE proxy on mobile. Called from Swift/Kotlin at startup.
+/// No AppHandle here — the extension bridge is desktop-only.
 #[no_mangle]
 pub extern "C" fn start_dane_proxy() {
     proxy::dns::set_port(network_ports(DEFAULT_NETWORK).dns);
@@ -413,7 +425,7 @@ pub extern "C" fn start_dane_proxy() {
             return;
         }
     };
-    proxy::start_proxy(ca);
+    proxy::start_proxy(ca, None);
 }
 
 type BrowseFn = unsafe extern "C" fn(*const std::ffi::c_char, f64, f64, f64, f64, u8);
@@ -833,7 +845,7 @@ fn start_node(app_handle: tauri::AppHandle) {
                     std::sync::Arc::new(proxy::ca::CertAuthority::load_or_create(&base_dir).expect("CA"))
                 }
             };
-            proxy::start_proxy(ca);
+            proxy::start_proxy(ca, None);
             append_log(&state, "[fistbump] DANE proxy started");
         }
     }
@@ -1485,6 +1497,25 @@ fn toggle_mining(
     Ok(())
 }
 
+/// Tear down and restart fbd. Called by the frontend when it detects
+/// that we've been backgrounded long enough for iOS/Android to have
+/// broken the node's sockets or killed the child process — at which
+/// point a full restart is more reliable than trying to limp along
+/// with whatever half-dead state survived.
+///
+/// Delegates to `restart_if_managed`, which on desktop/Android kills
+/// and respawns the fbd child, and on iOS fires the Swift
+/// `FBDNode.shared.restart()` path via the registered FFI callback.
+#[tauri::command]
+fn restart_node(
+    state: tauri::State<'_, AppState>,
+    app_handle: tauri::AppHandle,
+) -> Result<(), String> {
+    println!("[fistbump] restart_node: restarting for foreground");
+    restart_if_managed(&state, app_handle);
+    Ok(())
+}
+
 // ── Proxy Setup ──
 
 #[cfg(desktop)]
@@ -1667,6 +1698,102 @@ fn resolve_migration(
     Ok(())
 }
 
+// ── Browser extension bridge ──
+
+/// Resolve a pending browser-extension request after the user clicks
+/// approve/deny in the wallet UI (or after the frontend has finished doing
+/// the real work for a sendTx / signMessage request). The corresponding
+/// extension IPC listener thread is blocked on the channel inside the
+/// registered PendingRequest; pushing a Decision unblocks it and lets it
+/// write the response back to the extension.
+///
+/// Three shapes to think about:
+///   - `{id, approve: true}` — simple yes (used by connect). The Rust
+///     handler builds the response (looks up the address).
+///   - `{id, approve: true, result: {...}}` — frontend has already done
+///     the work (sendTx produced a txid, signMessage produced a signature).
+///     We pass the value through unchanged.
+///   - `{id, approve: false, error?: "msg"}` — user denied, or frontend
+///     hit an error (wallet RPC failed, user cancelled unlock, etc.). The
+///     error message is what the dApp eventually sees.
+#[cfg(desktop)]
+#[tauri::command]
+fn resolve_ext_request(
+    id: String,
+    approve: bool,
+    result: Option<serde_json::Value>,
+    error: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    let pending = proxy::extension::take_pending(&id)
+        .ok_or_else(|| "no such pending request".to_string())?;
+
+    // Only persist the origin allowlist entry for the "connect" request
+    // type — for sendTx / signMessage the origin is already approved
+    // (must have been, since dApps have to connect first), so there's
+    // nothing to add.
+    if approve && pending.kind == "connect" {
+        let mut settings = state.settings.lock().unwrap();
+        if !settings.approved_origins.contains(&pending.origin) {
+            settings.approved_origins.push(pending.origin.clone());
+            let _ = fs::create_dir_all(settings_dir());
+            let _ = fs::write(
+                settings_path(),
+                serde_json::to_string_pretty(&*settings).unwrap_or_default(),
+            );
+        }
+    }
+
+    let decision = if approve {
+        match result {
+            Some(value) => proxy::extension::Decision::ApproveWith(value),
+            None => proxy::extension::Decision::Approve,
+        }
+    } else {
+        proxy::extension::Decision::Deny(error.unwrap_or_else(|| "user denied".to_string()))
+    };
+    pending
+        .responder
+        .send(decision)
+        .map_err(|e| format!("listener thread is gone: {}", e))?;
+    Ok(())
+}
+
+/// Read the user's currently-approved origins. Surfaced so the wallet
+/// settings UI (later) can show them and offer per-origin revocation.
+#[cfg(desktop)]
+#[tauri::command]
+fn list_approved_origins(state: tauri::State<'_, AppState>) -> Vec<String> {
+    state.settings.lock().unwrap().approved_origins.clone()
+}
+
+/// Tell the Rust side which wallet the user currently has open in the UI.
+/// The browser-extension bridge uses this to scope `getwalletinfo` lookups
+/// to the right wallet. Pass `None` (omit the field) on logout.
+#[cfg(desktop)]
+#[tauri::command]
+fn set_active_wallet(name: Option<String>, state: tauri::State<'_, AppState>) {
+    *state.active_wallet.lock().unwrap() = name.filter(|s| !s.is_empty());
+}
+
+/// Revoke a previously-approved origin. Called from the wallet settings UI.
+#[cfg(desktop)]
+#[tauri::command]
+fn revoke_approved_origin(
+    origin: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    let mut settings = state.settings.lock().unwrap();
+    settings.approved_origins.retain(|o| o != &origin);
+    let _ = fs::create_dir_all(settings_dir());
+    fs::write(
+        settings_path(),
+        serde_json::to_string_pretty(&*settings).unwrap_or_default(),
+    )
+    .map_err(|e| format!("write settings: {}", e))?;
+    Ok(())
+}
+
 // ── App ──
 
 #[cfg(mobile)]
@@ -1683,6 +1810,12 @@ pub fn run() {
     proxy::dns::set_port(network_ports(DEFAULT_NETWORK).dns);
 
     tauri::Builder::default()
+        // Registers the `fistbump://` URL scheme so the browser extension can
+        // launch us when the wallet isn't running. Bundling adds the scheme to
+        // Info.plist on macOS, the Windows registry, and a .desktop file on
+        // Linux. We don't need the runtime API — we just want the OS to bring
+        // the app up; the extension's HTTP fetch handles everything else.
+        .plugin(tauri_plugin_deep_link::init())
         .manage(AppState {
             settings: Mutex::new(settings),
             log_lines: Mutex::new(Vec::new()),
@@ -1690,6 +1823,8 @@ pub fn run() {
             is_quitting: AtomicBool::new(false),
             #[cfg(desktop)]
             pending_migration: Mutex::new(None),
+            #[cfg(desktop)]
+            active_wallet: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
             rpc_call,
@@ -1706,6 +1841,7 @@ pub fn run() {
             get_settings,
             set_miner_address,
             toggle_mining,
+            restart_node,
             biometric_available,
             biometric_save,
             biometric_load,
@@ -1722,6 +1858,14 @@ pub fn run() {
             get_pending_migration,
             #[cfg(desktop)]
             resolve_migration,
+            #[cfg(desktop)]
+            resolve_ext_request,
+            #[cfg(desktop)]
+            list_approved_origins,
+            #[cfg(desktop)]
+            revoke_approved_origin,
+            #[cfg(desktop)]
+            set_active_wallet,
         ])
         .setup(|app| {
             // On desktop, check whether we should offer to copy wallets from a
@@ -1767,7 +1911,18 @@ pub fn run() {
                     }
                 }
 
-                proxy::start_proxy(ca);
+                proxy::start_proxy(ca, Some(app.handle().clone()));
+
+                // Bind the Unix socket the browser extension talks to via the
+                // `fistbump-bridge` native messaging host. Must come before
+                // installing the native host JSON so the bridge has something
+                // to connect to as soon as it spawns.
+                proxy::extension::start_ipc_listener(app.handle().clone());
+
+                // Drop our native messaging host JSON into every Chromium-family
+                // browser's NativeMessagingHosts directory so the extension can
+                // launch us via chrome.runtime.connectNative without a prompt.
+                proxy::extension::install_native_messaging_host(&app.handle());
             }
 
             let _ = app;

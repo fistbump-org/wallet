@@ -1,6 +1,8 @@
 pub mod ca;
 pub mod dane;
 pub mod dns;
+#[cfg(desktop)]
+pub mod extension;
 pub mod icann;
 pub mod listener;
 pub mod pac;

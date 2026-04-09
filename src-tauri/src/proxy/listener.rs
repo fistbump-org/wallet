@@ -104,7 +104,7 @@ fn cached_mint(
 }
 
 /// Start the proxy listeners (HTTP + SOCKS5) in background threads.
-pub fn start_proxy(ca: SharedCA) {
+pub fn start_proxy(ca: SharedCA, _app: Option<tauri::AppHandle>) {
     // Ensure rustls has a crypto provider installed (required on iOS where
     // feature auto-detection doesn't work).
     let _ = rustls::crypto::ring::default_provider().install_default();
@@ -168,6 +168,7 @@ pub fn start_proxy(ca: SharedCA) {
     });
 
     // Start HTTP proxy (used by desktop PAC and Android ProxyController)
+    let app_for_proxy = _app.clone();
     std::thread::spawn(move || {
         let addr = format!("127.0.0.1:{}", pac::PROXY_PORT);
         let mut listener = match TcpListener::bind(&addr) {
@@ -184,9 +185,10 @@ pub fn start_proxy(ca: SharedCA) {
                 match stream {
                     Ok(s) => {
                         let ca = ca.clone();
+                        let app = app_for_proxy.clone();
                         std::thread::spawn(move || {
                             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                handle_connection(s, &ca)
+                                handle_connection(s, &ca, app.as_ref())
                             }));
                             match result {
                                 Ok(Err(e)) => {
@@ -227,9 +229,11 @@ pub fn start_proxy(ca: SharedCA) {
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
-fn handle_connection(stream: TcpStream, ca: &SharedCA) -> Result<(), BoxError> {
+fn handle_connection(stream: TcpStream, ca: &SharedCA, app: Option<&tauri::AppHandle>) -> Result<(), BoxError> {
     // Short timeout for reading the initial request line + headers.
     // Tunnel handlers override with longer timeouts for the relay phase.
+    // The extension /connect endpoint blocks waiting for user approval, so
+    // it sets its own much longer timeouts before calling recv_timeout.
     stream.set_read_timeout(Some(std::time::Duration::from_secs(10)))?;
     stream.set_write_timeout(Some(std::time::Duration::from_secs(10)))?;
 
@@ -257,6 +261,13 @@ fn handle_connection(stream: TcpStream, ca: &SharedCA) -> Result<(), BoxError> {
         }
         headers.push(line);
     }
+
+    // The browser extension used to talk to us via HTTP at /.fistbump/ext/*
+    // on this very listener. That route is gone — extension traffic now goes
+    // through the Unix socket served by `proxy::extension::start_ipc_listener`,
+    // reached via the `fistbump-bridge` native messaging host. We keep `app`
+    // around for future hooks but ignore it for now.
+    let _ = app;
 
     // Serve PAC file
     if target == "/.fistbump/proxy.pac"

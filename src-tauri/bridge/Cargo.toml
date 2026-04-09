@@ -1,0 +1,16 @@
+[package]
+name = "fistbump-bridge"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# The bridge is a tiny standalone binary that proxies Chrome native messaging
+# stdio to the wallet's Unix socket. We deliberately keep its dependency
+# footprint to `std` only so the resulting binary is small (~450 KB) and
+# fast to spawn — Chrome creates a fresh process per `connectNative` call.
+# Living in its own crate also keeps Tauri's bundler from picking it up as
+# an additional binary of the wallet package.
+
+[[bin]]
+name = "fistbump-bridge"
+path = "src/main.rs"

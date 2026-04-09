@@ -46,11 +46,19 @@ if [ -d "$APP" ] && [ -d "$ICON_SRC" ]; then
   # may cache the old one if only the external binary changed).
   cp src-tauri/binaries/fbd-aarch64-apple-darwin "$APP/Contents/MacOS/fbd"
 
-  # Strip extended attributes and re-sign after modifying the bundle
-  # Sign fbd first (inside-out), then the app bundle
+  # Strip extended attributes and re-sign after modifying the bundle.
+  # Inside-out: every Mach-O nested in the bundle gets signed individually
+  # before we re-seal the container. Apple's notary rejects bundles with any
+  # unsigned executables, and Tauri's bundler doesn't sign files copied via
+  # `bundle.resources` (only the main binary and `externalBin` entries).
+  # That's why fistbump-bridge needs an explicit codesign here even though
+  # fbd is signed for a different reason (force-overwrite cache invalidation).
   echo "Re-signing app..."
   xattr -cr "$APP"
   codesign --force --sign "$APPLE_SIGNING_IDENTITY" --options runtime --timestamp "$APP/Contents/MacOS/fbd"
+  if [ -f "$APP/Contents/Resources/fistbump-bridge" ]; then
+    codesign --force --sign "$APPLE_SIGNING_IDENTITY" --options runtime --timestamp "$APP/Contents/Resources/fistbump-bridge"
+  fi
   codesign --force --sign "$APPLE_SIGNING_IDENTITY" --options runtime --timestamp "$APP"
 
   # Rebuild DMG with the patched app

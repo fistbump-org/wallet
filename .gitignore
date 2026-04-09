@@ -7,3 +7,5 @@ bin/
 src-tauri/target/
 src-tauri/binaries/
 src-tauri/gen/
+# Built by build-bridge.sh on every `tauri build` — not source.
+src-tauri/resources/fistbump-bridge

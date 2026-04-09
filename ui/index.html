@@ -449,7 +449,10 @@
 <div class="modal-overlay hidden" id="send-modal">
   <div class="modal-card">
     <div class="modal-header">
-      <h2>Send</h2>
+      <div class="modal-header-text">
+        <h2>Send</h2>
+        <div class="modal-subtitle">Send Fistbump to an address or a name.</div>
+      </div>
       <div class="close-btn" id="send-modal-close">&times;</div>
     </div>
     <div id="send-form">
@@ -463,17 +466,32 @@
         <div class="btn btn-sm" id="send-max">Max</div>
       </div>
       <div id="send-status"></div>
-      <div class="btn primary" id="send-review">Review Transaction</div>
+      <div class="btn primary btn-block" id="send-review">Review Transaction</div>
     </div>
-    <div class="hidden fb-list" id="send-confirm">
-      <div>
-        <div class="confirm-row"><span class="confirm-label">To</span><span class="confirm-value" id="confirm-to"><span id="confirm-to-name"></span><span class="confirm-to-address mono" id="confirm-to-address"></span></span></div>
-        <div class="confirm-row"><span class="confirm-label">Amount</span><span class="confirm-value" id="confirm-amount"></span></div>
-        <div class="confirm-row"><span class="confirm-label">Fee</span><span class="confirm-value" id="confirm-fee"></span></div>
-        <div class="confirm-row total"><span class="confirm-label">Total</span><span class="confirm-value" id="confirm-total"></span></div>
+    <div class="hidden" id="send-confirm">
+      <div class="review-body">
+        <div class="review-row primary">
+          <div class="review-row-label">Amount</div>
+          <div class="review-row-value fbc" id="confirm-amount"></div>
+        </div>
+        <div class="review-row">
+          <div class="review-row-label">To</div>
+          <div class="review-row-value stack" id="confirm-to">
+            <span id="confirm-to-name"></span>
+            <span id="confirm-to-address"></span>
+          </div>
+        </div>
+        <div class="review-row">
+          <div class="review-row-label">Fee</div>
+          <div class="review-row-value fbc" id="confirm-fee"></div>
+        </div>
+        <div class="review-row total">
+          <div class="review-row-label">Total</div>
+          <div class="review-row-value fbc" id="confirm-total"></div>
+        </div>
       </div>
       <div id="send-confirm-status"></div>
-      <div class="confirm-actions">
+      <div class="review-actions">
         <div class="btn" id="send-back">Back</div>
         <div class="btn primary" id="send-do">Confirm &amp; Send</div>
       </div>
@@ -483,19 +501,23 @@
 <div class="modal-overlay hidden" id="receive-modal">
   <div class="modal-card">
     <div class="modal-header">
-      <h2>Receive</h2>
+      <div class="modal-header-text">
+        <h2>Receive</h2>
+        <div class="modal-subtitle">Share this address to receive Fistbump. A fresh address is safe to reuse, but a new one gives you better on-chain privacy.</div>
+      </div>
       <div class="close-btn" id="receive-modal-close">&times;</div>
     </div>
     <div id="recv-status"><div class="modal-loading">Generating address...</div></div>
     <div class="address-display hidden" id="recv-addr"></div>
     <div class="recv-actions hidden" id="recv-actions">
-      <div class="btn" id="copy-addr">Copy Address</div>
       <div class="btn" id="recv-new">New Address</div>
+      <div class="btn primary" id="copy-addr">Copy Address</div>
     </div>
   </div>
 </div>
 <div class="modal-overlay hidden" id="confirm-modal">
   <div class="modal-card confirm-dialog">
+    <div class="confirm-dialog-title hidden" id="confirm-title"></div>
     <div class="confirm-dialog-msg" id="confirm-msg"></div>
     <div class="confirm-actions">
       <div class="btn" id="confirm-cancel">Cancel</div>
@@ -506,7 +528,10 @@
 <div class="modal-overlay hidden" id="multisig-modal">
   <div class="modal-card">
     <div class="modal-header">
-      <h2>Multisig Transaction</h2>
+      <div class="modal-header-text">
+        <h2>Multisig Transaction</h2>
+        <div class="modal-subtitle">Share this partially-signed transaction with your cosigners, then combine their signatures here before broadcasting.</div>
+      </div>
       <div class="close-btn" id="multisig-close">&times;</div>
     </div>
     <div id="multisig-status"></div>
@@ -527,7 +552,10 @@
 <div class="modal-overlay hidden" id="cosign-modal">
   <div class="modal-card">
     <div class="modal-header">
-      <h2>Cosign / Broadcast</h2>
+      <div class="modal-header-text">
+        <h2>Cosign / Broadcast</h2>
+        <div class="modal-subtitle">Paste a partially-signed transaction to add your signature, then copy or broadcast the result.</div>
+      </div>
       <div class="close-btn" id="cosign-close">&times;</div>
     </div>
     <div class="section-label">Paste Transaction</div>
@@ -549,7 +577,8 @@
 </div>
 <div class="modal-overlay hidden" id="unlock-modal">
   <div class="modal-card confirm-dialog">
-    <div class="confirm-dialog-msg">Enter passphrase to unlock wallet</div>
+    <div class="confirm-dialog-title">Unlock Wallet</div>
+    <div class="confirm-dialog-msg">Enter your passphrase to continue.</div>
     <div class="field">
       <input type="password" id="unlock-passphrase" placeholder="Passphrase" autocomplete="off">
     </div>
@@ -563,7 +592,10 @@
 <div class="modal-overlay hidden" id="qr-show-modal">
   <div class="modal-card">
     <div class="modal-header">
-      <h2>Recovery QR Code</h2>
+      <div class="modal-header-text">
+        <h2>Recovery QR Code</h2>
+        <div class="modal-subtitle">Scan this code on another device to restore your wallet.</div>
+      </div>
       <div class="close-btn" id="qr-show-close">&times;</div>
     </div>
     <div id="qr-show-status"></div>
@@ -576,7 +608,10 @@
 <div class="modal-overlay hidden" id="qr-scan-modal">
   <div class="modal-card">
     <div class="modal-header">
-      <h2>Scan Recovery QR</h2>
+      <div class="modal-header-text">
+        <h2>Scan Recovery QR</h2>
+        <div class="modal-subtitle">Point your camera at a Fistbump recovery QR code.</div>
+      </div>
       <div class="close-btn" id="qr-scan-close">&times;</div>
     </div>
     <div id="qr-scan-status"></div>
@@ -588,14 +623,17 @@
 <div class="modal-overlay hidden" id="repair-modal">
   <div class="modal-card">
     <div class="modal-header">
-      <h2>Repair Bid</h2>
+      <div class="modal-header-text">
+        <h2>Repair Bid</h2>
+        <div class="modal-subtitle">Rebuild a reveal from a bid whose nonce got lost by re-entering the original bid value.</div>
+      </div>
       <div class="close-btn" id="repair-close">&times;</div>
     </div>
     <div id="repair-name" class="repair-name"></div>
     <div id="repair-lockup" class="repair-lockup"></div>
-    <div class="mb-8">
-      <label class="form-label">Bid Value</label>
-      <input type="number" id="repair-value" step="any" min="0" placeholder="Enter your actual bid" class="form-input">
+    <div class="field">
+      <label>Bid Value</label>
+      <input type="number" id="repair-value" step="any" min="0" placeholder="Enter your actual bid">
     </div>
     <div class="btn-group">
       <div class="btn primary btn-flex" id="repair-submit">Recover</div>

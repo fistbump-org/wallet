@@ -1,0 +1,46 @@
+{
+  "manifest_version": 3,
+  "name": "Fistbump",
+  "version": "0.1.0",
+  "description": "Connects web apps to the Fistbump desktop app via window.fistbump.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAmJxCujpNB+tl2OyGFWlwwJJh4WWUWfomxuPsYmvR+bMrOV+eTqKO+8Z/PyXRC0QKeEQHiK5d/GYfQkE+XC8aIlreX5mNx9V/FfbFENanUlHuBGCVXMQaIXBAPcTNpQ/BNPR4neovztdj/IOIQf2eg78+uK70hmE2k4ClJRkQOcxmZ2oGB35V9S2B1itcvnDEVTZej0/2nenlUrg+YqWtj4dxNjDRMEyyi3bJf+8vFY8iT7P1cjT5x/MAQv20s2VWtpkpUXtNg90wo1FOxaom8I/tVgykrTS56Ez1Xg228LsOM4nZxwgiRqQRADZbSx7AVy5T5r2Q/5csV5KA4HFZQwIDAQAB",
+  "permissions": [
+    "nativeMessaging"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content-script.js"],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["injected.js"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:17350/*"
+  ],
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Fistbump",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  }
+}

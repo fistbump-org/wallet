@@ -1,0 +1,121 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Fistbump</title>
+  <style>
+    /*
+     * Brand tokens mirrored from dev/fistbump.css — the extension is its
+     * own Chrome context and can't import the shared theme file, so we
+     * bring the values in by hand to keep the visual identity in sync.
+     */
+    :root {
+      --fb-bg:          #09090b;
+      --fb-text:        #fafafa;
+      --fb-text-muted:  #a1a1aa;
+      --fb-text-dim:    #71717a;
+      --fb-green:       #4ade80;
+      --fb-font-sans:   -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, Helvetica, Arial, sans-serif;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      width: 280px;
+      font-family: var(--fb-font-sans);
+      color: var(--fb-text);
+      background: var(--fb-bg);
+    }
+
+    /* About-This-Mac style: centered icon, name, version. */
+    .card {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      padding: 28px 20px 24px;
+      text-align: center;
+    }
+
+    .icon {
+      width: 72px;
+      height: 72px;
+      border-radius: 16px;
+      /* Square shadow + subtle ring so the flat white mark reads as a tile
+         on the dark background, like macOS's icon chrome. */
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.55), 0 0 0 0.5px rgba(255, 255, 255, 0.08);
+      overflow: hidden;
+    }
+    .icon img {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
+    .name {
+      font-size: 20px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      color: var(--fb-text);
+    }
+
+    .version {
+      font-size: 11px;
+      color: var(--fb-text-dim);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 11px;
+      color: var(--fb-text-muted);
+      margin-top: 2px;
+    }
+    .status .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--fb-text-dim);
+      flex-shrink: 0;
+      transition: background 0.3s;
+    }
+    .status.ok .dot {
+      background: var(--fb-green);
+      /* Gentle breathing pulse — matches the wallet's "connected to peers"
+         indicator. Uses two box-shadow rings that expand and fade. */
+      animation: pulse 2.2s ease-in-out infinite;
+    }
+    .status.ok {
+      color: var(--fb-text-muted);
+    }
+    .status.off .dot {
+      background: var(--fb-text-dim);
+    }
+
+    @keyframes pulse {
+      0%, 100% {
+        box-shadow: 0 0 0 0 rgba(74, 222, 128, 0.45);
+      }
+      50% {
+        box-shadow: 0 0 0 5px rgba(74, 222, 128, 0);
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon">
+      <img src="icons/icon-128.png" alt="Fistbump icon">
+    </div>
+    <div class="name">Fistbump</div>
+    <div class="version" id="version"></div>
+    <div class="status off" id="status">
+      <span class="dot"></span>
+      <span id="status-label">Checking…</span>
+    </div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

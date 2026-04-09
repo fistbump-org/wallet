@@ -232,6 +232,10 @@ body.light {
   font-size: 12px;
   text-align: center;
   line-height: 1.5;
+  padding: 10px 14px;
+  background: rgba(251, 191, 36, 0.08);
+  border: 1px solid rgba(251, 191, 36, 0.25);
+  border-radius: 8px;
 }
 
 .bg-root { background: #09090b; }
@@ -669,13 +673,23 @@ main {
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: rgba(0, 0, 0, 0.6);
+  /* Backdrop blur makes the wallet's own chrome recede when a modal opens,
+     so the modal feels like the app is "holding" on it. Safari prefix for
+     older WebKit (iOS, tauri's webview on older macs). */
+  backdrop-filter: blur(10px) saturate(140%);
+  -webkit-backdrop-filter: blur(10px) saturate(140%);
   display: flex;
   align-items: center;
   z-index: 300;
   justify-content: center;
+  animation: modal-overlay-in 0.18s ease-out;
 }
 #unlock-modal { z-index: 400; }
+@keyframes modal-overlay-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
 .modal-card {
   background: var(--bg-raised);
   border: 1px solid var(--border);
@@ -685,16 +699,97 @@ main {
   max-width: 90%;
   max-height: 90vh;
   overflow-y: auto;
+  /* Soft lifted shadow + a hairline highlight on the top edge so the card
+     reads as "floating" instead of "stuck to the viewport". The highlight
+     is only visible in dark mode because of the low alpha. */
+  box-shadow:
+    0 24px 64px -16px rgba(0, 0, 0, 0.7),
+    0 2px 8px rgba(0, 0, 0, 0.25),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  animation: modal-card-in 0.22s cubic-bezier(0.2, 0.9, 0.3, 1.1);
 }
+@keyframes modal-card-in {
+  from { opacity: 0; transform: scale(0.96) translateY(6px); }
+  to   { opacity: 1; transform: scale(1)    translateY(0); }
+}
+body.light .modal-card {
+  box-shadow:
+    0 24px 64px -16px rgba(0, 0, 0, 0.18),
+    0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
 .modal-header {
   display: flex;
   justify-content: space-between;
-  align-items: center;
-  margin-bottom: 20px;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+.modal-header-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
 }
 .modal-header h2 {
-  font-size: 18px;
+  font-size: 20px;
   font-weight: 600;
+  letter-spacing: -0.015em;
+  line-height: 1.2;
+}
+/* Muted one-liner under the modal title. Explains the purpose of the
+ * modal without taking up much space. Sibling of h2 inside .modal-header-text. */
+.modal-subtitle {
+  font-size: 12.5px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+/* Modal form labels share the small-caps aesthetic of .review-row-label so
+ * every input field in a modal feels like part of the same design language.
+ * Scoped to .modal-card so we don't inadvertently restyle the login screen
+ * or the settings page forms. */
+.modal-card .field {
+  gap: 14px;
+}
+.modal-card .field label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+/* Modal inputs + textareas get a touch more breathing room than the base
+ * to feel balanced inside the richer modal layout. */
+.modal-card input,
+.modal-card textarea,
+.modal-card select {
+  padding: 10px 13px;
+}
+.modal-card textarea.textarea-code {
+  padding: 14px 16px;
+  font-size: 12px;
+  line-height: 1.55;
+  border-radius: 10px;
+  background: var(--bg-input);
+}
+
+/* Generic primary button inside any modal is beefier than the base — same
+ * treatment as the review-actions primary so every confirm-shaped action
+ * feels substantial. */
+.modal-card .btn.primary,
+.modal-card .btn.danger {
+  padding: 11px 18px;
+  font-weight: 600;
+}
+/* Stretchy full-width CTA for single-button flows (e.g. Review Transaction
+ * in the send form). Callers opt in by adding the class to the button. */
+.btn.btn-block {
+  display: block;
+  width: 100%;
+  text-align: center;
+  margin-top: 6px;
 }
 .close-btn {
   background: none;
@@ -708,7 +803,13 @@ main {
 .close-btn:hover { color: var(--text); background: none; }
 .recv-actions {
   display: flex;
-  gap: 8px;
+  gap: 10px;
+}
+.recv-actions .btn {
+  flex: 1;
+  padding: 10px 14px;
+  font-weight: 600;
+  text-align: center;
 }
 .filter-bar {
   display: flex;
@@ -1205,6 +1306,202 @@ a.tx-link:hover { text-decoration: underline; }
   gap: 8px;
 }
 
+/* ── Structured review modal (.modal-card.review) ────────────────────
+ * Used by the browser-extension bridge for sendTx / signMessage
+ * approval prompts. Fits inside the regular .modal-card shell but adds
+ * an origin badge header, labelled data rows, and a prominent primary
+ * action. Built dynamically by showReview() in app.js.
+ */
+.modal-card.review {
+  padding: 24px 24px 20px;
+  width: 420px;
+}
+
+.review-header {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 18px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* Small pill showing the requesting origin + a lock glyph. Mirrors the
+ * "site requesting permission" badge pattern most wallets use. */
+.review-origin {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px 5px 8px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 9999px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  max-width: 100%;
+}
+.review-origin svg {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+.review-origin-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.review-title {
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  color: var(--text);
+  margin-top: 4px;
+}
+.review-subtitle {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+/* ── Body: either a list of labelled rows, or a monospace code block.
+ * Rows are borderless by default — the vertical rhythm does the separating
+ * work. The "primary" row (typically Amount) gets the largest treatment,
+ * the "total" row gets a top border to visually mark the sum.            */
+.review-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 22px;
+}
+
+.review-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 16px;
+  font-size: 13px;
+}
+.review-row-label {
+  color: var(--text-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  flex-shrink: 0;
+}
+.review-row-value {
+  color: var(--text);
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+}
+.review-row-value.mono {
+  font-family: var(--fb-font-mono);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* Stacked variant — right-aligned column of block children. Used by the
+ * wallet's Send review where the `To` cell shows both a resolved Fistbump
+ * name and the underlying fb1... address on separate lines. */
+.review-row-value.stack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  white-space: normal;
+  overflow: visible;
+}
+.review-row-value.stack > span {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.review-row-value.stack > span:first-child {
+  font-weight: 500;
+  font-size: 13px;
+  color: var(--text);
+}
+.review-row-value.stack > span:first-child:empty { display: none; }
+.review-row-value.stack > span + span {
+  font-family: var(--fb-font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.review-row.primary {
+  align-items: baseline;
+  margin: 4px 0 2px;
+}
+.review-row.primary .review-row-label {
+  font-size: 11px;
+}
+.review-row.primary .review-row-value {
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+
+.review-row.total {
+  padding-top: 10px;
+  margin-top: 2px;
+  border-top: 1px solid var(--border);
+}
+.review-row.total .review-row-value {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+/* Monospace code block for signMessage — takes the place of the rows
+ * when showReview is given a `code` field instead of `rows`. */
+.review-code {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 16px;
+  font-family: var(--fb-font-mono);
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text);
+  max-height: 260px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+}
+
+.review-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.review-actions .btn {
+  flex: 1;
+  text-align: center;
+  padding: 11px 16px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* Responsive — on narrow screens the review modal tightens up. */
+@media (max-width: 520px) {
+  .modal-card.review {
+    width: 100%;
+    padding: 20px 18px 16px;
+  }
+  .review-row.primary .review-row-value {
+    font-size: 24px;
+  }
+}
+
 .modal-loading { color: var(--text-muted); padding: 8px 0; }
 .error-msg { color: var(--red); padding: 6px 0; font-size: 13px; }
 .success-msg { color: var(--green); padding: 6px 0; font-size: 13px; }
@@ -1212,13 +1509,16 @@ a.tx-link:hover { text-decoration: underline; }
   font-family: var(--fb-font-mono);
   font-size: 13px;
   color: var(--text);
-  background: var(--bg);
-  padding: 14px;
-  border-radius: 8px;
-  margin: 10px 0 14px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  padding: 16px 18px;
+  border-radius: 10px;
+  margin: 10px 0 18px;
   overflow-wrap: break-word; word-break: break-word;
   user-select: all;
-  line-height: 1.5;
+  line-height: 1.55;
+  letter-spacing: 0.01em;
+  text-align: center;
 }
 
 /* Names & Auctions */
@@ -1349,18 +1649,36 @@ body[data-platform="android"] #settings-resolving {
 
 /* Confirm dialog */
 .confirm-dialog {
-  width: 360px;
+  width: 380px;
   text-align: center;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
+  padding: 28px 28px 22px;
+}
+.confirm-dialog-title {
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  margin-bottom: -6px;  /* tighten gap to the message */
 }
 .confirm-dialog-msg {
-  font-size: 14px;
-  line-height: 1.6;
-  color: var(--text);
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--text-secondary);
   white-space: pre-line;
   overflow-wrap: break-word; word-break: break-word;
+}
+/* Give the action row a bit more space above it in the confirm dialog.
+   The top margin takes advantage of the dialog's flex gap being smaller. */
+.confirm-dialog .confirm-actions {
+  margin-top: 4px;
+}
+.confirm-dialog .confirm-actions .btn {
+  flex: 1;
+  padding: 10px 14px;
+  font-weight: 600;
 }
 
 /* Mobile-only elements hidden on desktop */

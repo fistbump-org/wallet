@@ -1,3 +1,11 @@
+[workspace]
+# The fistbump-bridge binary lives in its own crate so Tauri's bundler
+# only picks up the wallet binary. If we put it under src/bin/ here,
+# Cargo would treat it as a second binary target of this package and
+# Tauri would end up bundling it as Contents/MacOS/fistbump-bridge,
+# clobbering the actual wallet binary slot.
+members = ["bridge"]
+
 [package]
 name = "fistbump"
 version = "0.1.0"
@@ -14,9 +22,10 @@ serde_json = "1"
 
 [dependencies]
 tauri = { version = "2", features = [] }
+tauri-plugin-deep-link = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking"] }
 url = "2"
 dirs = "5"
 open = "5"

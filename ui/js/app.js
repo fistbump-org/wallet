@@ -207,7 +207,7 @@
     if (a && a.href) {
       e.preventDefault();
       var url = a.href;
-      showConfirm('Open in browser?\n' + url).then(function(ok) {
+      showConfirm(url, { title: 'Open external link?', okText: 'Open' }).then(function(ok) {
         if (ok) __invoke('open_external', { url: url });
       });
     }
@@ -217,6 +217,15 @@
   function showConfirm(msg, opts) {
     return new Promise(function(resolve) {
       var overlay = document.getElementById('confirm-modal');
+      var titleEl = document.getElementById('confirm-title');
+      var title = opts && opts.title;
+      if (title) {
+        titleEl.textContent = title;
+        titleEl.classList.remove('hidden');
+      } else {
+        titleEl.textContent = '';
+        titleEl.classList.add('hidden');
+      }
       document.getElementById('confirm-msg').textContent = msg;
       var okBtn = document.getElementById('confirm-ok');
       var cancelBtn = document.getElementById('confirm-cancel');
@@ -244,13 +253,209 @@
     });
   }
 
-  function showAlert(msg) {
+  // Structured review modal used for any "site is asking you to approve
+  // something" flow — currently the extension bridge's sendTx and
+  // signMessage requests, but the shape is general enough to reuse for
+  // future action prompts too.
+  //
+  // Config:
+  //   origin      (string, required) — site identifier shown in the badge
+  //   title       (string, required) — big heading, e.g. "Send Transaction"
+  //   subtitle    (string, optional) — dim one-liner under the title
+  //   rows        (array,  optional) — list of
+  //                 { label, value?, fbcBumps?, mono?, variant? }
+  //               fbcBumps takes precedence: when set, the row value is
+  //               rendered as <span class="fbc-icon"></span> + formatted
+  //               number, matching the wallet's native amount display and
+  //               dropping the literal "FBC" unit.
+  //               variant is 'primary' or 'total' for the special rows.
+  //   code        (string, optional) — monospace block for signMessage
+  //   confirmText (string, required) — primary button label
+  //   danger      (bool,   optional) — render primary as a danger button
+  //
+  // Returns a Promise that resolves to true (confirmed) or false (cancelled
+  // / backdrop click / escape).
+  function showReview(config) {
+    return new Promise(function(resolve) {
+      // ── DOM construction ──
+      // Build the whole thing with createElement + textContent so there's
+      // no innerHTML path where a caller's string could be interpreted as
+      // markup. Origin strings, tx addresses, and raw sign-message content
+      // all flow through user-controlled channels.
+
+      var overlay = document.createElement('div');
+      overlay.className = 'modal-overlay';
+
+      var card = document.createElement('div');
+      card.className = 'modal-card review';
+      overlay.appendChild(card);
+
+      // Header: origin badge + title + subtitle
+      var header = document.createElement('div');
+      header.className = 'review-header';
+      card.appendChild(header);
+
+      if (config.origin) {
+        var badge = document.createElement('div');
+        badge.className = 'review-origin';
+        // Inline padlock glyph built via createElementNS (no innerHTML).
+        // Kept inline so the modal is self-contained and matches the
+        // currentColor of the badge.
+        var svgNs = 'http://www.w3.org/2000/svg';
+        var svg = document.createElementNS(svgNs, 'svg');
+        svg.setAttribute('viewBox', '0 0 16 16');
+        svg.setAttribute('fill', 'none');
+        svg.setAttribute('stroke', 'currentColor');
+        svg.setAttribute('stroke-width', '1.5');
+        svg.setAttribute('stroke-linecap', 'round');
+        svg.setAttribute('stroke-linejoin', 'round');
+        var rect = document.createElementNS(svgNs, 'rect');
+        rect.setAttribute('x', '3');
+        rect.setAttribute('y', '7');
+        rect.setAttribute('width', '10');
+        rect.setAttribute('height', '7');
+        rect.setAttribute('rx', '1.5');
+        svg.appendChild(rect);
+        var path = document.createElementNS(svgNs, 'path');
+        path.setAttribute('d', 'M5 7V4.5a3 3 0 0 1 6 0V7');
+        svg.appendChild(path);
+        badge.appendChild(svg);
+
+        var originLabel = document.createElement('span');
+        originLabel.className = 'review-origin-label';
+        originLabel.textContent = config.origin;
+        badge.appendChild(originLabel);
+        header.appendChild(badge);
+      }
+
+      if (config.title) {
+        var title = document.createElement('div');
+        title.className = 'review-title';
+        title.textContent = config.title;
+        header.appendChild(title);
+      }
+      if (config.subtitle) {
+        var subtitle = document.createElement('div');
+        subtitle.className = 'review-subtitle';
+        subtitle.textContent = config.subtitle;
+        header.appendChild(subtitle);
+      }
+
+      // Body: either rows (sendTx) or code block (signMessage). For request
+      // types with no structured body at all (e.g. connect), skip the
+      // div entirely so its bottom margin doesn't leave a dead gap.
+      var hasBody = config.code !== undefined
+        || (Array.isArray(config.rows) && config.rows.length > 0);
+      var body = document.createElement('div');
+      body.className = 'review-body';
+      if (hasBody) card.appendChild(body);
+
+      if (config.code !== undefined) {
+        var code = document.createElement('div');
+        code.className = 'review-code';
+        code.textContent = config.code;
+        body.appendChild(code);
+      }
+      if (Array.isArray(config.rows)) {
+        config.rows.forEach(function(row) {
+          var rowEl = document.createElement('div');
+          rowEl.className = 'review-row' + (row.variant ? ' ' + row.variant : '');
+          var label = document.createElement('div');
+          label.className = 'review-row-label';
+          label.textContent = row.label || '';
+          var value = document.createElement('div');
+          value.className = 'review-row-value'
+            + (row.mono ? ' mono' : '')
+            + (row.fbcBumps != null ? ' fbc' : '')
+            + (row.stack ? ' stack' : '');
+
+          if (row.fbcBumps != null) {
+            // Fistbump native amount display: wordmark glyph (masked SVG
+            // via the existing .fbc-icon class) followed by the formatted
+            // number. Uses createElement + appendChild so we don't touch
+            // innerHTML for a user-influenced value.
+            var iconEl = document.createElement('span');
+            iconEl.className = 'fbc-icon';
+            value.appendChild(iconEl);
+            var numEl = document.createElement('span');
+            numEl.className = 'fbc-amount';
+            numEl.textContent = formatFBC(row.fbcBumps, { noIcon: true });
+            value.appendChild(numEl);
+          } else if (row.stack) {
+            // Two-line cell: an optional name on top, mono address below.
+            // The .stack CSS hides the first span when :empty so callers
+            // can unconditionally set both fields.
+            var nameSpan = document.createElement('span');
+            nameSpan.textContent = row.stack.name || '';
+            value.appendChild(nameSpan);
+            var addrSpan = document.createElement('span');
+            addrSpan.textContent = row.stack.address || '';
+            if (row.stack.address) addrSpan.title = row.stack.address;
+            value.appendChild(addrSpan);
+          } else {
+            value.textContent = row.value != null ? String(row.value) : '';
+            if (row.mono) value.title = String(row.value || '');
+          }
+
+          rowEl.appendChild(label);
+          rowEl.appendChild(value);
+          body.appendChild(rowEl);
+        });
+      }
+
+      // Action row: Cancel + primary confirm
+      var actions = document.createElement('div');
+      actions.className = 'review-actions';
+      var cancelBtn = document.createElement('div');
+      cancelBtn.className = 'btn';
+      cancelBtn.textContent = 'Cancel';
+      var confirmBtn = document.createElement('div');
+      confirmBtn.className = 'btn ' + (config.danger ? 'danger' : 'primary');
+      confirmBtn.textContent = config.confirmText || 'Confirm';
+      actions.appendChild(cancelBtn);
+      actions.appendChild(confirmBtn);
+      card.appendChild(actions);
+
+      document.body.appendChild(overlay);
+
+      // ── Event wiring ──
+      var resolved = false;
+      function done(val) {
+        if (resolved) return;
+        resolved = true;
+        document.removeEventListener('keydown', onKey, true);
+        overlay.remove();
+        resolve(val);
+      }
+      function onKey(e) {
+        if (e.key === 'Enter') { e.preventDefault(); done(true); }
+        else if (e.key === 'Escape') { e.preventDefault(); done(false); }
+      }
+      confirmBtn.addEventListener('click', function() { done(true); });
+      cancelBtn.addEventListener('click', function() { done(false); });
+      overlay.addEventListener('click', function(e) {
+        if (e.target === overlay) done(false);
+      });
+      document.addEventListener('keydown', onKey, true);
+    });
+  }
+
+  function showAlert(msg, opts) {
     return new Promise(function(resolve) {
       var overlay = document.getElementById('confirm-modal');
+      var titleEl = document.getElementById('confirm-title');
+      var title = opts && opts.title;
+      if (title) {
+        titleEl.textContent = title;
+        titleEl.classList.remove('hidden');
+      } else {
+        titleEl.textContent = '';
+        titleEl.classList.add('hidden');
+      }
       document.getElementById('confirm-msg').textContent = msg;
       var okBtn = document.getElementById('confirm-ok');
       var cancelBtn = document.getElementById('confirm-cancel');
-      okBtn.textContent = 'OK';
+      okBtn.textContent = (opts && opts.okText) || 'OK';
       cancelBtn.style.display = 'none';
       overlay.classList.remove('hidden');
       var resolved = false;
@@ -271,6 +476,255 @@
       document.getElementById('confirm-ok').addEventListener('click', function() { done(); });
     });
   }
+
+  // ---- Browser Extension Bridge ----
+  // The wallet runs a Unix socket listener at ~/.fistbump/extension.sock
+  // that the bundled fistbump-bridge native messaging host forwards to.
+  // When a dApp calls window.fistbump.{connect, sendTx, signMessage}, the
+  // Rust side stashes the request and emits one of the events below. We
+  // show the appropriate modal, do any fbd RPC work that's needed, and
+  // ship the result back via `resolve_ext_request`, which unblocks the
+  // listener thread.
+  (function() {
+    var ev = window.__TAURI__ && window.__TAURI__.event;
+    if (!ev || typeof ev.listen !== 'function') return;
+
+    // Shared helper: ack the Rust side with either a success payload or
+    // an error string. Tauri rejects any command whose args miss a
+    // required field, so we pass explicit nulls for the optional ones.
+    async function resolveExt(id, result, error) {
+      try {
+        await __invoke('resolve_ext_request', {
+          id: id,
+          approve: !error,
+          result: result || null,
+          error: error || null,
+        });
+      } catch (err) {
+        console.error('resolve_ext_request failed:', err);
+      }
+    }
+
+    // ── connect ──
+    // Ask the user whether to let the dApp see their address. On approve,
+    // the Rust side builds the response itself (it knows the current
+    // wallet's receive address) — we just say "yes" with no payload.
+    ev.listen('ext://request', async function(e) {
+      var p = e && e.payload;
+      if (!p || !p.id || !p.origin) return;
+      var ok = await showReview({
+        origin: p.origin,
+        title: 'Connect Wallet',
+        subtitle: 'This site is requesting access to your Fistbump wallet. '
+          + 'It will be able to see your address and ask to sign transactions and messages. '
+          + 'Every transaction still requires your approval before it is signed.',
+        confirmText: 'Connect',
+      });
+      await resolveExt(p.id, null, ok ? null : 'user denied');
+    });
+
+    // ── sendTx ──
+    // The dApp asked us to send FBC to an address or Fistbump name. We
+    // resolve the recipient, build the tx via createtx, show the user a
+    // structured review modal with the fee-inclusive total, unlock the
+    // wallet, sign, broadcast, and return the txid. Any RPC error
+    // becomes a dApp-visible error.
+    ev.listen('ext://tx-request', async function(e) {
+      var p = e && e.payload;
+      if (!p || !p.id || !p.origin || !p.to || typeof p.amount !== 'number') {
+        if (p && p.id) await resolveExt(p.id, null, 'invalid tx request payload');
+        return;
+      }
+      try {
+        // Accept either an fb1... address or a Fistbump name in `to`.
+        // resolveRecipient tries validateaddress first, then
+        // resolveaddress for name lookups. When the input was a name, we
+        // keep it around so the review modal can show it on top of the
+        // resolved address.
+        var resolved;
+        try {
+          resolved = await resolveRecipient(p.to);
+        } catch (err) {
+          await resolveExt(
+            p.id,
+            null,
+            'could not resolve recipient: ' + ((err && err.message) || String(err))
+          );
+          return;
+        }
+
+        var createRes = await rpc('createtx', ['none', resolved.address, p.amount]);
+        if (createRes.error) {
+          await resolveExt(p.id, null, friendlyError(createRes.error));
+          return;
+        }
+        var pstx = createRes.result.pstx;
+
+        var decodeRes = await rpc('decoderawtransaction', [pstx]);
+        if (decodeRes.error) {
+          await resolveExt(p.id, null, friendlyError(decodeRes.error));
+          return;
+        }
+        var fee = decodeRes.result.fee || 0;
+        var amountDoo = Math.round(p.amount * 1000000);
+        var totalDoo = amountDoo + fee;
+
+        // Build the "To" row: if the dApp passed a Fistbump name, use
+        // the stack variant to show name-on-top / address-below (same
+        // treatment as the wallet's own Send review). Otherwise a plain
+        // mono address cell.
+        var toRow = resolved.name
+          ? {
+              label: 'To',
+              stack: { name: resolved.name, address: resolved.address },
+            }
+          : { label: 'To', value: resolved.address, mono: true };
+
+        var ok = await showReview({
+          origin: p.origin,
+          title: 'Send Transaction',
+          subtitle: 'This site is requesting a transaction from your wallet.',
+          rows: [
+            { label: 'Amount', fbcBumps: amountDoo, variant: 'primary' },
+            toRow,
+            { label: 'Fee',    fbcBumps: fee },
+            { label: 'Total',  fbcBumps: totalDoo, variant: 'total' },
+          ],
+          confirmText: 'Confirm & Send',
+        });
+        if (!ok) {
+          await resolveExt(p.id, null, 'user denied');
+          return;
+        }
+
+        // requireUnlock is a no-op if the wallet is already unlocked.
+        if (!await requireUnlock()) {
+          await resolveExt(p.id, null, 'unlock cancelled');
+          return;
+        }
+
+        var signRes = await rpc('signtx', [pstx]);
+        if (signRes.error) {
+          await resolveExt(p.id, null, friendlyError(signRes.error));
+          return;
+        }
+        var broadRes = await rpc('broadcasttx', [signRes.result.pstx]);
+        if (broadRes.error) {
+          await resolveExt(p.id, null, friendlyError(broadRes.error));
+          return;
+        }
+        await resolveExt(p.id, { txid: broadRes.result.txid }, null);
+      } catch (err) {
+        await resolveExt(p.id, null, (err && err.message) || String(err));
+      }
+    });
+
+    // ── signMessage ──
+    // Pops a review modal with the message body in a monospace block,
+    // unlocks the wallet, then calls either fbd's signmessage (against
+    // the active wallet's receive address) or signmessagewithname (when
+    // the dApp specified a Fistbump name in the payload). Returns
+    // {signature, address} or {signature, name} accordingly.
+    ev.listen('ext://sign-request', async function(e) {
+      var p = e && e.payload;
+      if (!p || !p.id || !p.origin || typeof p.message !== 'string') {
+        if (p && p.id) await resolveExt(p.id, null, 'invalid sign request payload');
+        return;
+      }
+      try {
+        // When the dApp wants to sign as a specific Fistbump name, verify
+        // ownership BEFORE popping the approval modal. A hostile dApp
+        // could otherwise pass a name the user doesn't control and rely
+        // on the "Signing as" label to mislead them. We ask fbd for the
+        // current on-chain owner of the name, then check whether that
+        // address belongs to this wallet via validateaddress.ismine —
+        // the same pattern the name detail page uses.
+        if (p.name) {
+          var infoRes = await rpc('getnameinfo', [p.name]);
+          if (infoRes.error) {
+            await resolveExt(p.id, null, 'name lookup failed: ' + friendlyError(infoRes.error));
+            return;
+          }
+          var nameInfo = infoRes.result;
+          if (!nameInfo || !nameInfo.owner || !nameInfo.owner.address) {
+            await resolveExt(p.id, null, 'the name "' + p.name + '" is not registered');
+            return;
+          }
+          var ownerCheck = await rpc('validateaddress', [nameInfo.owner.address]);
+          var ownerIsMine = ownerCheck.result && ownerCheck.result.ismine;
+          if (!ownerIsMine) {
+            await resolveExt(p.id, null, 'you don\u2019t own the name "' + p.name + '"');
+            return;
+          }
+        }
+
+        // Build review config. When the dApp asked to sign as a specific
+        // Fistbump name, surface that prominently — the user should see
+        // the signing identity before approving.
+        var reviewConfig = {
+          origin: p.origin,
+          title: 'Sign Message',
+          subtitle: p.name
+            ? 'This site wants you to sign the following message as "' + p.name + '". It will not broadcast anything on-chain.'
+            : 'This site wants you to sign the following message. It will not broadcast anything on-chain.',
+          code: p.message,
+          confirmText: 'Sign Message',
+        };
+        if (p.name) {
+          reviewConfig.rows = [{ label: 'Signing as', value: p.name }];
+        }
+
+        var ok = await showReview(reviewConfig);
+        if (!ok) {
+          await resolveExt(p.id, null, 'user denied');
+          return;
+        }
+
+        if (!await requireUnlock()) {
+          await resolveExt(p.id, null, 'unlock cancelled');
+          return;
+        }
+
+        if (p.name) {
+          // signmessagewithname uses the private key owning the name,
+          // not the wallet's default receive address.
+          var signRes = await rpc('signmessagewithname', [p.name, p.message]);
+          if (signRes.error) {
+            await resolveExt(p.id, null, friendlyError(signRes.error));
+            return;
+          }
+          await resolveExt(
+            p.id,
+            { signature: signRes.result, name: p.name },
+            null
+          );
+        } else {
+          var info = await rpc('getwalletinfo');
+          if (info.error) {
+            await resolveExt(p.id, null, friendlyError(info.error));
+            return;
+          }
+          var address = info.result && info.result.address;
+          if (!address) {
+            await resolveExt(p.id, null, 'no active address');
+            return;
+          }
+          var signByAddrRes = await rpc('signmessage', [address, p.message]);
+          if (signByAddrRes.error) {
+            await resolveExt(p.id, null, friendlyError(signByAddrRes.error));
+            return;
+          }
+          await resolveExt(
+            p.id,
+            { signature: signByAddrRes.result, address: address },
+            null
+          );
+        }
+      } catch (err) {
+        await resolveExt(p.id, null, (err && err.message) || String(err));
+      }
+    });
+  })();
 
   const NETWORKS = {
     main:    { rpcPort: 32869, hrp: 'fb' },
@@ -677,6 +1131,9 @@
 
   async function selectWallet(name) {
     activeWallet = name;
+    // Let the Rust side know which wallet to use for browser-extension
+    // requests. Best-effort — desktop only, missing on mobile.
+    try { __invoke('set_active_wallet', { name: name }); } catch(_) {}
     var loginEl = document.getElementById('login-screen');
     var appEl = document.getElementById('app');
     // Fade out login screen
@@ -730,6 +1187,7 @@
       updateLockIndicator();
     }
     activeWallet = null;
+    try { __invoke('set_active_wallet', { name: null }); } catch(_) {}
     currentAddress = null;
     walletIsMultisig = false;
     walletMultisigM = 0;
@@ -1131,6 +1589,20 @@
   });
 
   var _fbcIconHTML = '<span class="fbc-icon"></span>';
+
+  // Populate `el` with a fistbump icon + formatted amount using DOM nodes
+  // (no innerHTML). Replaces the common `el.innerHTML = formatFBC(bumps)`
+  // pattern so we don't touch HTML interpretation when the wrapping code
+  // is near user-controlled input.
+  function setFbcAmount(el, bumps) {
+    while (el.firstChild) el.removeChild(el.firstChild);
+    var icon = document.createElement('span');
+    icon.className = 'fbc-icon';
+    el.appendChild(icon);
+    var num = document.createElement('span');
+    num.textContent = formatFBC(bumps, { noIcon: true });
+    el.appendChild(num);
+  }
 
   function formatFBC(bumps, opts) {
     if (bumps == null) return '0.00';
@@ -1918,18 +2390,14 @@
 
       var nameEl = document.getElementById('confirm-to-name');
       var addrEl = document.getElementById('confirm-to-address');
-      if (resolved.name) {
-        nameEl.textContent = resolved.name;
-        nameEl.style.display = '';
-        addrEl.textContent = resolved.address;
-      } else {
-        nameEl.style.display = 'none';
-        nameEl.textContent = '';
-        addrEl.textContent = resolved.address;
-      }
-      document.getElementById('confirm-amount').innerHTML = formatFBC(recipientDoo);
-      document.getElementById('confirm-fee').innerHTML = formatFBC(fee);
-      document.getElementById('confirm-total').innerHTML = formatFBC(totalDoo);
+      // The .stack variant of .review-row-value hides the first <span>
+      // when it's :empty, so we can just unconditionally set both text
+      // contents instead of toggling display.
+      nameEl.textContent = resolved.name || '';
+      addrEl.textContent = resolved.address;
+      setFbcAmount(document.getElementById('confirm-amount'), recipientDoo);
+      setFbcAmount(document.getElementById('confirm-fee'), fee);
+      setFbcAmount(document.getElementById('confirm-total'), totalDoo);
       document.getElementById('send-confirm-status').innerHTML = '';
       document.getElementById('send-form').classList.add('hidden');
       document.getElementById('send-confirm').classList.remove('hidden');
@@ -2084,7 +2552,7 @@
       e.preventDefault();
       var url = explorerLink.dataset.url;
       if (url) {
-        showConfirm('Open in browser?\n' + url).then(function(ok) {
+        showConfirm(url, { title: 'Open external link?', okText: 'Open' }).then(function(ok) {
           if (ok) __invoke('open_external', { url: url });
         });
       }
@@ -4040,7 +4508,10 @@
       el.innerHTML = '<div class="error-msg">Passphrases do not match.</div>';
       return;
     }
-    if (!await showConfirm('Encrypt wallet? You will need this passphrase to send transactions. Make sure you have a backup of your mnemonic.')) return;
+    if (!await showConfirm(
+      'You will need this passphrase to send transactions. Make sure you have a backup of your mnemonic first.',
+      { title: 'Encrypt wallet?', okText: 'Encrypt' }
+    )) return;
     el.innerHTML = '<div class="modal-loading">Encrypting...</div>';
     try {
       var res = await rpc('encryptwallet', [pass1]);
@@ -4530,16 +5001,59 @@
   // Fallback poll for initial state and when SSE is disconnected
   setInterval(() => { if (activeWallet && !_esConnected) refresh(); }, 10000);
 
-  // Reconnect when app returns to foreground (iOS kills network when backgrounded)
-  document.addEventListener('visibilitychange', function() {
-    if (document.visibilityState === 'visible') {
-      // Tell node to check for dead peers and reconnect
-      rpc('reconnect').catch(function() {});
-      if (!_esConnected) {
-        connectEventStream();
-      }
-      if (activeWallet) refresh();
+  // ── Foreground recovery ──────────────────────────────────────────
+  //
+  // Mobile is brutal on a long-lived node: iOS suspends us after ~30s
+  // in the background (severing TCP sockets), and Android can kill the
+  // fbd child outright to reclaim memory. The old "just call
+  // rpc('reconnect')" path fell over in practice because:
+  //   1. If fbd is actually dead, the RPC silently times out and
+  //      nothing gets restarted.
+  //   2. The EventSource may report itself as still connected from the
+  //      browser's side even though the underlying pipe is dead —
+  //      onerror doesn't fire until the next attempted read.
+  //
+  // New policy: track how long we've been hidden. On a short flip
+  // (<5s, e.g. pulling down Control Centre) we just nudge fbd and
+  // refresh. On anything longer we invoke the `restart_node` Tauri
+  // command — which on desktop/Android kills and respawns the fbd
+  // child process, and on iOS triggers FBDNode.shared.restart() via
+  // FFI — and force an SSE reconnect so the browser doesn't sit on a
+  // stale EventSource. The 3s retry loop in connectEventStream's
+  // onerror handles waiting for the new fbd to be ready.
+  var _lastHiddenAt = 0;
+  var FOREGROUND_RESTART_THRESHOLD_MS = 5000;
+
+  document.addEventListener('visibilitychange', async function() {
+    if (document.visibilityState === 'hidden') {
+      _lastHiddenAt = Date.now();
+      return;
     }
+
+    // We're coming back to foreground.
+    var hiddenMs = _lastHiddenAt ? Date.now() - _lastHiddenAt : 0;
+    var longBackground = hiddenMs >= FOREGROUND_RESTART_THRESHOLD_MS;
+
+    if (longBackground) {
+      // Full tear-down + restart on the native side. Errors are
+      // swallowed — if the restart fails, connectEventStream's retry
+      // loop will keep trying to reconnect anyway.
+      try {
+        await __invoke('restart_node');
+      } catch (e) {}
+    }
+
+    // Always force an SSE reconnect: the existing EventSource may
+    // believe it's still open even though the underlying socket was
+    // torn down by the OS. connectEventStream() closes the old _es
+    // before opening a new one.
+    _esConnected = false;
+    connectEventStream();
+
+    // Fall through to the peer-reconnect nudge + UI refresh — cheap,
+    // and useful even on short backgroundings where fbd is still fine.
+    rpc('reconnect').catch(function() {});
+    if (activeWallet) refresh();
   });
 
   // ---- Demo Mode ----
