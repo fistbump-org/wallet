@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!--
+  Fistbump browser extension icon — source SVG.
+
+  Dark squircle background + Fistbump wordmark centered in white.
+  The corner radius (~22% of the canvas) matches the iOS / macOS
+  squircle ratio closely enough that it's visually indistinguishable
+  from a true superellipse at the icon sizes Chrome renders (16-128px).
+
+  Rasterized at build time via `build-icons.sh` into icon-16.png,
+  icon-32.png, icon-48.png, icon-128.png for the extension manifest.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <rect x="0" y="0" width="1024" height="1024" rx="229" ry="229" fill="#fafafa"/>
+  <svg x="153" y="307" width="717" height="410" viewBox="0 0 576 330" preserveAspectRatio="xMidYMid meet">
+    <g transform="matrix(1,0,0,1,-212,-335)">
+      <path d="M362,664.616L391.107,575.58L589.761,575.58L597.951,550.384L717.331,550.384L680.011,664.616L362,664.616ZM668.125,335.384L788.125,335.384L721.215,540.384L601.216,540.384L668.125,335.384ZM460.556,565.384L535.625,335.384L655.625,335.384L580.573,565.384L460.556,565.384ZM328.056,565.384L403.125,335.384L523.125,335.384L448.057,565.384L328.056,565.384ZM270.625,335.384L390.625,335.384L331.876,515.384L211.875,515.384L270.625,335.384Z" fill="#09090b" fill-rule="evenodd"/>
+    </g>
+  </svg>
+</svg>

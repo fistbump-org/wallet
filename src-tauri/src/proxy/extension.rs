@@ -558,10 +558,15 @@ fn current_address(app: &AppHandle) -> AddressLookup {
 
 // ── Native messaging host installer ──
 
-/// Stable extension ID derived from the public `key` in `wallet/extension/manifest.json`.
-/// This is what we put in the native messaging host JSON's `allowed_origins`
-/// so Chrome only spawns the bridge when the request comes from our extension.
-const EXTENSION_ID: &str = "epflhbnbnmhicfmiepfhbldfchjoojmb";
+/// Stable extension ID, shared between the Chrome Web Store listing and
+/// local unpacked dev builds. The `key` field in
+/// `wallet/extension/manifest.json` is the Web Store's assigned public
+/// key — Chrome hashes it to derive this ID on local loads, and the
+/// Web Store already publishes under it. We put it in the native
+/// messaging host JSON's `allowed_origins` so Chrome only spawns the
+/// bridge when the request comes from our extension, regardless of
+/// whether it was installed from the Web Store or loaded unpacked.
+const EXTENSION_ID: &str = "gdmmlkmiogkhboacejgemhghamolgaol";
 
 /// Native messaging host name. The extension's `chrome.runtime.connectNative`
 /// call uses this exact string; the JSON file we write must match.
