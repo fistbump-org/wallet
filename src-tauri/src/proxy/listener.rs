@@ -24,7 +24,7 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, Serve
 use rustls::ClientConfig;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{TcpListener, TcpStream, ToSocketAddrs};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -1057,9 +1057,22 @@ fn handle_connect(writer: &mut TcpStream, target: &str, ca: &SharedCA, buffered:
 
 /// Straight TCP tunnel for non-Fistbump names.
 fn tunnel_direct(writer: &mut TcpStream, host: &str, port: u16, buffered: &[u8]) -> Result<(), BoxError> {
-    let upstream = TcpStream::connect(format!("{}:{}", host, port))?;
+    // Resolve + connect with a per-address timeout so a stalled CDN node
+    // fails fast instead of hanging for the kernel's 75-second default.
+    let addrs: Vec<std::net::SocketAddr> = format!("{}:{}", host, port).to_socket_addrs()?.collect();
+    let timeout = std::time::Duration::from_secs(10);
+    let upstream = match addrs.iter().find_map(|a| TcpStream::connect_timeout(a, timeout).ok()) {
+        Some(s) => s,
+        None => {
+            // Tell the browser so it can show a real error / retry.
+            let _ = writer.write_all(
+                b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            );
+            return Err(format!("tunnel_direct: connect to {}:{} failed", host, port).into());
+        }
+    };
+
     // Set timeouts on both sides so stalled tunnels don't leak threads.
-    // 5 minutes is generous for any HTTP/HTTPS exchange.
     let tunnel_timeout = Some(std::time::Duration::from_secs(300));
     upstream.set_read_timeout(tunnel_timeout)?;
     upstream.set_write_timeout(Some(std::time::Duration::from_secs(30)))?;
@@ -1078,12 +1091,17 @@ fn tunnel_direct(writer: &mut TcpStream, host: &str, port: u16, buffered: &[u8])
     let mut upstream_clone = upstream.try_clone()?;
     let mut writer_clone = writer.try_clone()?;
 
+    // When one direction hits EOF or error, shut down the other side so
+    // the peer thread wakes up immediately instead of blocking until the
+    // 300-second read timeout. This keeps tunnel threads short-lived.
     let handle = std::thread::spawn(move || {
         let _ = std::io::copy(&mut upstream_clone, &mut writer_clone);
+        let _ = writer_clone.shutdown(std::net::Shutdown::Both);
     });
 
     let mut upstream_write = upstream.try_clone()?;
     let _ = std::io::copy(writer, &mut upstream_write);
+    let _ = upstream.shutdown(std::net::Shutdown::Both);
     let _ = handle.join();
 
     Ok(())

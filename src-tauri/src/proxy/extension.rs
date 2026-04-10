@@ -568,13 +568,18 @@ fn current_address(app: &AppHandle) -> AddressLookup {
 /// whether it was installed from the Web Store or loaded unpacked.
 const EXTENSION_ID: &str = "gdmmlkmiogkhboacejgemhghamolgaol";
 
+/// Firefox extension ID used in `browser_specific_settings.gecko.id`
+/// in the Firefox build of the extension manifest, and in the native
+/// messaging host's `allowed_extensions` list.
+const FIREFOX_EXTENSION_ID: &str = "extension@fistbump.org";
+
 /// Native messaging host name. The extension's `chrome.runtime.connectNative`
 /// call uses this exact string; the JSON file we write must match.
 const NM_HOST_NAME: &str = "org.fistbump.wallet";
 
 /// On desktop, register this wallet's `fistbump-bridge` binary as the
-/// native messaging host for the browser extension in every
-/// Chromium-family browser we know about.
+/// native messaging host for the browser extension in every supported
+/// browser (Chromium-family and Firefox).
 ///
 /// This is platform-specific:
 ///   - **macOS + Linux**: drop a JSON manifest into each browser's
@@ -589,6 +594,10 @@ const NM_HOST_NAME: &str = "org.fistbump.wallet";
 ///     somewhere on disk. We write the JSON once to `%APPDATA%\Fistbump\`
 ///     and then create the registry entries for each known browser.
 ///
+/// Chromium and Firefox use different native messaging manifest formats:
+///   - Chromium: `allowed_origins` with `chrome-extension://ID/`
+///   - Firefox:  `allowed_extensions` with the addon ID string
+///
 /// Idempotent and best-effort: if a browser isn't installed we skip it,
 /// and any individual write failure is logged but doesn't fail startup.
 /// In dev mode (`tauri dev`) the bundled bridge binary doesn't exist,
@@ -597,109 +606,146 @@ pub fn install_native_messaging_host(app: &AppHandle) {
     let Some(resource_dir) = app.path().resource_dir().ok() else {
         return;
     };
-    // Tauri bundles the bridge under a platform-specific filename —
-    // `.exe` on Windows, no extension elsewhere. The resource dir is
-    // the right place on every desktop platform.
     #[cfg(target_os = "windows")]
     let bridge = resource_dir.join("fistbump-bridge.exe");
     #[cfg(not(target_os = "windows"))]
     let bridge = resource_dir.join("fistbump-bridge");
 
     if !bridge.exists() {
-        // Dev build — no bundled resources. Native messaging only works
-        // when the user is running the bundled app.
         return;
     }
 
-    // Defensive: make sure the binary is executable. The Tauri bundler
-    // should preserve the +x bit, but bit-rot is easy.
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(&bridge, std::fs::Permissions::from_mode(0o755));
     }
 
-    let manifest = serde_json::json!({
+    let bridge_path = bridge.display().to_string();
+
+    // Chromium-family manifest (allowed_origins).
+    let chromium_manifest = serde_json::json!({
         "name": NM_HOST_NAME,
         "description": "Fistbump Wallet bridge for the browser extension",
-        "path": bridge.display().to_string(),
+        "path": bridge_path,
         "type": "stdio",
         "allowed_origins": [format!("chrome-extension://{}/", EXTENSION_ID)],
     });
-    let manifest_str = match serde_json::to_string_pretty(&manifest) {
+
+    // Firefox manifest (allowed_extensions).
+    let firefox_manifest = serde_json::json!({
+        "name": NM_HOST_NAME,
+        "description": "Fistbump Wallet bridge for the browser extension",
+        "path": bridge_path,
+        "type": "stdio",
+        "allowed_extensions": [FIREFOX_EXTENSION_ID],
+    });
+
+    let chromium_str = match serde_json::to_string_pretty(&chromium_manifest) {
         Ok(s) => s,
         Err(e) => {
-            println!("[fistbump] failed to serialize native host manifest: {}", e);
+            println!("[fistbump] failed to serialize chromium host manifest: {}", e);
+            return;
+        }
+    };
+    let firefox_str = match serde_json::to_string_pretty(&firefox_manifest) {
+        Ok(s) => s,
+        Err(e) => {
+            println!("[fistbump] failed to serialize firefox host manifest: {}", e);
             return;
         }
     };
 
     #[cfg(target_os = "macos")]
-    install_host_json_unix(&manifest_str, &macos_browser_dirs());
+    {
+        install_host_json_unix(&chromium_str, &macos_browser_dirs());
+        install_host_json_unix(&firefox_str, &macos_firefox_dirs());
+    }
 
     #[cfg(target_os = "linux")]
-    install_host_json_unix(&manifest_str, &linux_browser_dirs());
+    {
+        install_host_json_unix(&chromium_str, &linux_browser_dirs());
+        install_host_json_unix(&firefox_str, &linux_firefox_dirs());
+    }
 
     #[cfg(target_os = "windows")]
-    install_host_windows(&manifest_str);
+    {
+        install_host_windows(&chromium_str, &windows_chromium_keys());
+        install_host_windows(&firefox_str, &windows_firefox_keys());
+    }
 }
 
-/// Per-user browser data dirs on macOS whose `NativeMessagingHosts/`
-/// subdir Chrome + friends read. Order doesn't matter — each browser
-/// reads its own.
+// Browser directory tuples: (browser_detect_dir, nm_subdir_name, display_name).
+//
+// `browser_detect_dir` is checked for existence to skip browsers that
+// aren't installed. `nm_subdir_name` is appended to it to form the
+// directory where the manifest JSON is written. All paths are relative
+// to $HOME.
+//
+// Chromium browsers always use `NativeMessagingHosts` as the subdir.
+// Firefox on macOS also uses `NativeMessagingHosts`, but Firefox on
+// Linux uses the lowercase-hyphenated `native-messaging-hosts`.
+
+/// Per-user Chromium browser data dirs on macOS.
 #[cfg(target_os = "macos")]
-fn macos_browser_dirs() -> Vec<(&'static str, &'static str)> {
+fn macos_browser_dirs() -> Vec<(&'static str, &'static str, &'static str)> {
     vec![
-        ("Library/Application Support/Google/Chrome", "Chrome"),
-        ("Library/Application Support/Chromium", "Chromium"),
-        (
-            "Library/Application Support/BraveSoftware/Brave-Browser",
-            "Brave",
-        ),
-        ("Library/Application Support/Microsoft Edge", "Edge"),
-        ("Library/Application Support/Arc/User Data", "Arc"),
-        ("Library/Application Support/Vivaldi", "Vivaldi"),
+        ("Library/Application Support/Google/Chrome", "NativeMessagingHosts", "Chrome"),
+        ("Library/Application Support/Chromium", "NativeMessagingHosts", "Chromium"),
+        ("Library/Application Support/BraveSoftware/Brave-Browser", "NativeMessagingHosts", "Brave"),
+        ("Library/Application Support/Microsoft Edge", "NativeMessagingHosts", "Edge"),
+        ("Library/Application Support/Arc/User Data", "NativeMessagingHosts", "Arc"),
+        ("Library/Application Support/Vivaldi", "NativeMessagingHosts", "Vivaldi"),
     ]
 }
 
-/// Per-user browser data dirs on Linux. Chrome et al use `~/.config/<name>/`
-/// as their profile root and expect native-messaging manifests at
-/// `<profile root>/NativeMessagingHosts/<host-name>.json`. Arc doesn't
-/// exist on Linux, so it's absent here.
+/// Firefox on macOS.
+#[cfg(target_os = "macos")]
+fn macos_firefox_dirs() -> Vec<(&'static str, &'static str, &'static str)> {
+    vec![
+        ("Library/Application Support/Mozilla", "NativeMessagingHosts", "Firefox"),
+    ]
+}
+
+/// Per-user Chromium browser data dirs on Linux.
 #[cfg(target_os = "linux")]
-fn linux_browser_dirs() -> Vec<(&'static str, &'static str)> {
+fn linux_browser_dirs() -> Vec<(&'static str, &'static str, &'static str)> {
     vec![
-        (".config/google-chrome", "Chrome"),
-        (".config/chromium", "Chromium"),
-        (".config/BraveSoftware/Brave-Browser", "Brave"),
-        (".config/microsoft-edge", "Edge"),
-        (".config/vivaldi", "Vivaldi"),
+        (".config/google-chrome", "NativeMessagingHosts", "Chrome"),
+        (".config/chromium", "NativeMessagingHosts", "Chromium"),
+        (".config/BraveSoftware/Brave-Browser", "NativeMessagingHosts", "Brave"),
+        (".config/microsoft-edge", "NativeMessagingHosts", "Edge"),
+        (".config/vivaldi", "NativeMessagingHosts", "Vivaldi"),
     ]
 }
 
-/// Drop the manifest JSON into each browser's `NativeMessagingHosts/`
-/// directory. Shared between macOS and Linux since the mechanism is
-/// identical — they only differ in the browser-profile base paths.
+/// Firefox on Linux uses `~/.mozilla/native-messaging-hosts/` (lowercase,
+/// hyphens) rather than the CamelCase `NativeMessagingHosts` that
+/// Chromium and macOS Firefox use.
+#[cfg(target_os = "linux")]
+fn linux_firefox_dirs() -> Vec<(&'static str, &'static str, &'static str)> {
+    vec![
+        (".mozilla", "native-messaging-hosts", "Firefox"),
+    ]
+}
+
+/// Drop the manifest JSON into each browser's native-messaging-hosts
+/// directory. Shared between macOS and Linux — they only differ in paths.
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-fn install_host_json_unix(manifest_str: &str, browsers: &[(&str, &str)]) {
+fn install_host_json_unix(manifest_str: &str, browsers: &[(&str, &str, &str)]) {
     let Some(home) = dirs::home_dir() else {
         return;
     };
 
     let filename = format!("{}.json", NM_HOST_NAME);
-    // The previous build of the wallet shipped a different host name
-    // (`org.fistbump.wallet.launcher`) for the dumb spawn-and-exit launcher
-    // script. The new bridge replaces it under a cleaner name; clean up
-    // any leftover JSON files from the old name so they don't sit around
-    // pointing at a script we no longer ship.
     let legacy_filename = "org.fistbump.wallet.launcher.json";
 
-    for (subpath, name) in browsers {
+    for (subpath, nm_subdir, name) in browsers {
         let browser_dir = home.join(subpath);
         if !browser_dir.exists() {
             continue;
         }
-        let nm_dir = browser_dir.join("NativeMessagingHosts");
+        let nm_dir = browser_dir.join(nm_subdir);
         if let Err(e) = std::fs::create_dir_all(&nm_dir) {
             println!(
                 "[fistbump] native host install: mkdir {} failed: {}",
@@ -708,15 +754,12 @@ fn install_host_json_unix(manifest_str: &str, browsers: &[(&str, &str)]) {
             continue;
         }
 
-        // Drop the old launcher JSON if it's still around.
         let legacy_target = nm_dir.join(legacy_filename);
         if legacy_target.exists() {
             let _ = std::fs::remove_file(&legacy_target);
         }
 
         let target = nm_dir.join(&filename);
-        // Skip the write if the file is already exactly what we'd produce.
-        // Avoids needlessly bumping mtimes on every launch.
         if let Ok(existing) = std::fs::read_to_string(&target) {
             if existing == manifest_str {
                 continue;
@@ -736,25 +779,44 @@ fn install_host_json_unix(manifest_str: &str, browsers: &[(&str, &str)]) {
     }
 }
 
-/// Install the native messaging host on Windows. Two-step:
+/// Chromium registry keys on Windows.
+#[cfg(target_os = "windows")]
+fn windows_chromium_keys() -> Vec<(&'static str, &'static str)> {
+    vec![
+        ("Software\\Google\\Chrome", "Chrome"),
+        ("Software\\Chromium", "Chromium"),
+        ("Software\\BraveSoftware\\Brave-Browser", "Brave"),
+        ("Software\\Microsoft\\Edge", "Edge"),
+        ("Software\\Vivaldi", "Vivaldi"),
+    ]
+}
+
+/// Firefox registry key on Windows.
+#[cfg(target_os = "windows")]
+fn windows_firefox_keys() -> Vec<(&'static str, &'static str)> {
+    vec![
+        ("Software\\Mozilla", "Firefox"),
+    ]
+}
+
+/// Install a native messaging host on Windows. Two-step:
 ///
 ///   1. Write the manifest JSON to `%APPDATA%\Fistbump\org.fistbump.wallet.json`
-///      (a stable per-user location the wallet owns).
-///   2. For each Chromium-family browser, create
+///      (a stable per-user location the wallet owns). Chromium and Firefox
+///      manifests are written to separate files (suffixed `-chromium` and
+///      `-firefox`) since they have different `allowed_*` fields.
+///   2. For each browser, create
 ///      `HKCU\Software\<vendor>\<browser>\NativeMessagingHosts\org.fistbump.wallet`
-///      with the default value set to the manifest path. Chrome reads
-///      this registry value at `connectNative` time to find the manifest.
+///      with the default value set to the manifest path.
 ///
 /// Idempotent: we rewrite the JSON only if it changed, and `create_subkey`
 /// is a no-op if the key already exists.
 #[cfg(target_os = "windows")]
-fn install_host_windows(manifest_str: &str) {
+fn install_host_windows(manifest_str: &str, browsers: &[(&str, &str)]) {
     use winreg::enums::HKEY_CURRENT_USER;
     use winreg::RegKey;
 
-    // Step 1: write the manifest file.
     let Some(appdata) = dirs::config_dir() else {
-        // dirs::config_dir on Windows returns %APPDATA%\Roaming.
         println!("[fistbump] native host install: no APPDATA available");
         return;
     };
@@ -764,7 +826,12 @@ fn install_host_windows(manifest_str: &str) {
                  wallet_cfg.display(), e);
         return;
     }
-    let manifest_path = wallet_cfg.join(format!("{}.json", NM_HOST_NAME));
+
+    // Use browser-specific filename so Chromium and Firefox manifests
+    // (which differ in allowed_origins vs allowed_extensions) don't
+    // overwrite each other.
+    let suffix = if manifest_str.contains("allowed_extensions") { "firefox" } else { "chromium" };
+    let manifest_path = wallet_cfg.join(format!("{}-{}.json", NM_HOST_NAME, suffix));
     let write_needed = match std::fs::read_to_string(&manifest_path) {
         Ok(existing) => existing != manifest_str,
         Err(_) => true,
@@ -781,23 +848,10 @@ fn install_host_windows(manifest_str: &str) {
     }
     let manifest_path_str = manifest_path.display().to_string();
 
-    // Step 2: registry entries per browser. Each Chromium-family browser
-    // has its own (vendor, browser) pair under HKCU\Software — Chrome
-    // is `Google\Chrome`, Edge is `Microsoft\Edge`, etc.
-    let browsers: &[(&str, &str)] = &[
-        ("Software\\Google\\Chrome", "Chrome"),
-        ("Software\\Chromium", "Chromium"),
-        ("Software\\BraveSoftware\\Brave-Browser", "Brave"),
-        ("Software\\Microsoft\\Edge", "Edge"),
-        ("Software\\Vivaldi", "Vivaldi"),
-    ];
-
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     for (browser_key, name) in browsers {
         let host_key_path =
             format!("{}\\NativeMessagingHosts\\{}", browser_key, NM_HOST_NAME);
-        // create_subkey creates (or opens) the key, and is a no-op if it
-        // already exists — so this is safe to run on every launch.
         let (host_key, _disposition) = match hkcu.create_subkey(&host_key_path) {
             Ok(k) => k,
             Err(e) => {
@@ -808,8 +862,6 @@ fn install_host_windows(manifest_str: &str) {
                 continue;
             }
         };
-        // The default (unnamed) value is what Chrome reads — it should
-        // be the manifest path.
         if let Err(e) = host_key.set_value("", &manifest_path_str) {
             println!(
                 "[fistbump] native host install: set {} value failed: {}",

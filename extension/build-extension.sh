@@ -2,26 +2,25 @@
 #
 # build-extension.sh — package the Fistbump browser extension for upload.
 #
-# Produces two zips in dist/:
+# Produces three zips in dist/:
 #
 #   fistbump-extension-<version>-webstore.zip
 #       For uploading to the Chrome Web Store. The `key` field is
 #       stripped from manifest.json — the Web Store assigns its own
-#       public key. NOTE: the first Web Store upload will give you
-#       an extension ID *different* from the local-dev ID. You'll
-#       need to update the wallet's `EXTENSION_ID` constant in
-#       src-tauri/src/proxy/extension.rs to match, and also copy
-#       the Web Store's assigned public key back into manifest.json
-#       so local dev and Web Store share the same ID.
+#       public key.
+#
+#   fistbump-extension-<version>-firefox.zip
+#       For uploading to Firefox Add-ons (AMO). Adds
+#       `browser_specific_settings.gecko.id` and strips the Chrome
+#       `key` field.
 #
 #   fistbump-extension-<version>-unpacked.zip
 #       For internal distribution / side-loading. The `key` field
 #       is kept, so side-loaded installs have the same ID the wallet
-#       currently allowlists (`epflhbnbnmhicfmiepfhbldfchjoojmb`).
+#       currently allowlists.
 #
-# Both zips have manifest.json at the root (no wallet/extension/
-# wrapper directory) and exclude README / design assets that aren't
-# part of the runtime extension.
+# All zips have manifest.json at the root and exclude README / design
+# assets that aren't part of the runtime extension.
 #
 # Usage:
 #   cd wallet/extension
@@ -86,7 +85,29 @@ rm -f "$WEBSTORE"
 mv "$STAGE/.tmp-webstore.zip" "$WEBSTORE"
 echo "  webstore  → $WEBSTORE"
 
+# ── Firefox variant ──
+# - Add gecko ID + data_collection_permissions
+# - Add background.scripts fallback (Firefox MV3 requires it alongside service_worker)
+jq '
+  .browser_specific_settings = {
+    "gecko": {
+      "id": "extension@fistbump.org",
+      "data_collection_permissions": {
+        "required": ["none"]
+      }
+    }
+  }
+  | .background = {"scripts": [.background.service_worker]}
+' "$STAGE/manifest.json" > "$STAGE/manifest.firefox.json"
+mv "$STAGE/manifest.firefox.json" "$STAGE/manifest.json"
+
+FIREFOX="${DIST}/fistbump-extension-${VERSION}-firefox.zip"
+rm -f "$FIREFOX"
+(cd "$STAGE" && zip -rq "${PWD}/.tmp-firefox.zip" .)
+mv "$STAGE/.tmp-firefox.zip" "$FIREFOX"
+echo "  firefox   → $FIREFOX"
+
 # ── Summary ──
 echo ""
 echo "Packaged Fistbump extension v${VERSION}:"
-ls -lh "$UNPACKED" "$WEBSTORE" | awk '{print "  " $NF " (" $5 ")"}'
+ls -lh "$UNPACKED" "$WEBSTORE" "$FIREFOX" | awk '{print "  " $NF " (" $5 ")"}'
