@@ -497,8 +497,7 @@ fn handle_socks5(mut stream: TcpStream, ca: &SharedCA) -> Result<(), BoxError> {
     let is_fistbump = is_fistbump_name(&host);
 
     if is_fistbump {
-        let tld = extract_tld(&host);
-        match dns::resolve_full(tld) {
+        match dns::resolve_full(&host) {
             dns::ResolveResult::Ok(r) => {
                 connect_host = r.ipv4.as_deref()
                     .or(r.ipv6.as_deref())
@@ -681,8 +680,7 @@ fn handle_socks5_tls(mut stream: TcpStream, mut upstream: TcpStream, ca: &Shared
     upstream.set_read_timeout(Some(std::time::Duration::from_secs(30)))?;
     upstream.set_write_timeout(Some(std::time::Duration::from_secs(30)))?;
 
-    let tld = extract_tld(host);
-    let resolved = dns::resolve(tld);
+    let resolved = dns::resolve(host);
     let tlsa = resolved.as_ref().map(|r| &r.tlsa[..]).unwrap_or(&[]);
 
     let server_name: ServerName<'static> = ServerName::try_from(host.to_string())
@@ -826,9 +824,8 @@ fn handle_connect(writer: &mut TcpStream, target: &str, ca: &SharedCA, buffered:
 
     plog!("[fistbump] CONNECT {}:{}", host, port);
 
-    // Resolve via fbd DNS (query the TLD part)
-    let tld = extract_tld(&host);
-    let resolved = match dns::resolve_full(tld) {
+    // Resolve via fbd DNS
+    let resolved = match dns::resolve_full(&host) {
         dns::ResolveResult::Ok(r) => r,
         dns::ResolveResult::NotFound => {
             plog!("[fistbump] CONNECT: name not registered: {}", host);
@@ -1124,8 +1121,7 @@ fn handle_http(
     let (host, port, path) = parse_http_url(&url)?;
 
     let connect_addr = if is_fistbump_name(&host) {
-        let tld = extract_tld(&host);
-        match dns::resolve_full(tld) {
+        match dns::resolve_full(&host) {
             dns::ResolveResult::Ok(r) => {
                 let ip = r.ipv4.as_deref().or(r.ipv6.as_deref()).unwrap();
                 format!("{}:{}", ip, port)
