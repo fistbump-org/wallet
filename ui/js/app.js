@@ -1731,8 +1731,6 @@
     } catch(e) {
       dot.className = 'status-dot connecting';
       label.textContent = 'Connecting...';
-      document.getElementById('balance').innerHTML = '-- ';
-      document.getElementById('balance-details').innerHTML = '';
     }
   }
 
@@ -4477,6 +4475,7 @@
 
   document.getElementById('btn-delete-wallet').addEventListener('click', async () => {
     if (!activeWallet) return;
+    if (!await requireUnlock()) return;
     if (!await showConfirm('Permanently delete wallet "' + activeWallet + '"? This cannot be undone.', { danger: true, okText: 'Delete' })) return;
     if (!await showConfirm('Are you sure? All wallet data will be lost.', { danger: true, okText: 'Delete' })) return;
     try {
