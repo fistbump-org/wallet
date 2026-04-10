@@ -629,17 +629,19 @@
       </div>
       <div class="close-btn" id="repair-close">&times;</div>
     </div>
-    <div id="repair-name" class="repair-name"></div>
-    <div id="repair-lockup" class="repair-lockup"></div>
-    <div class="field">
-      <label>Bid Value</label>
-      <input type="number" id="repair-value" step="any" min="0" placeholder="Enter your actual bid">
+    <div id="repair-form">
+      <div id="repair-name" class="repair-name"></div>
+      <div id="repair-lockup" class="repair-lockup"></div>
+      <div class="field">
+        <label>Bid Value</label>
+        <input type="number" id="repair-value" step="any" min="0" placeholder="Enter your actual bid">
+      </div>
+      <div class="btn-group">
+        <div class="btn primary btn-flex" id="repair-submit">Recover</div>
+        <div class="btn btn-flex" id="repair-auto">Auto-Recover</div>
+      </div>
+      <div id="repair-status"></div>
     </div>
-    <div class="btn-group">
-      <div class="btn primary btn-flex" id="repair-submit">Recover</div>
-      <div class="btn btn-flex" id="repair-auto">Auto-Recover</div>
-    </div>
-    <div id="repair-status" class="mt-12"></div>
   </div>
 </div>
 <div class="toast-container" id="toast-container"></div>

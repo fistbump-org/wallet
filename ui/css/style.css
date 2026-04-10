@@ -1234,7 +1234,8 @@ a.tx-link:hover { text-decoration: underline; }
 .dot.ok { background: var(--green); }
 .dot.err { background: var(--red); }
 /* Settings */
-#send-form {
+#send-form,
+#repair-form {
   display: flex;
   flex-direction: column;
   gap: 12px;

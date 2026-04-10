@@ -44,11 +44,9 @@
   });
   sidebarBackdrop.addEventListener('click', closeSidebar);
 
-  // Browse: desktop uses sidebar nav item, mobile uses the mobile tab bar
-  if (!window.fistbump.mobile) {
-    if (window.fistbump.platform === 'ios' || window.fistbump.platform === 'android') {
-      document.getElementById('nav-browse').classList.remove('hidden');
-    }
+  // Browse: phones use the mobile tab bar, tablets use the sidebar nav item
+  if ((window.fistbump.platform === 'ios' || window.fistbump.platform === 'android') && window.innerWidth > 768) {
+    document.getElementById('nav-browse').classList.remove('hidden');
   }
 
   // Mobile tab bar (Wallet / Browser)
