@@ -103,8 +103,32 @@ fn cached_mint(
     Ok((chain, key))
 }
 
+/// Raise the file-descriptor soft limit to the hard limit.
+///
+/// macOS defaults to a soft limit of 256 FDs, which is easily exhausted by
+/// the proxy (each CONNECT tunnel holds ~6 FDs). Without this, heavy
+/// browsing causes `accept()` to fail with EMFILE, the listener thread
+/// exits, and the PAC is left pointing at a dead port — blocking all traffic.
+#[cfg(unix)]
+fn raise_fd_limit() {
+    use libc::{getrlimit, setrlimit, rlimit, RLIMIT_NOFILE};
+    unsafe {
+        let mut lim = rlimit { rlim_cur: 0, rlim_max: 0 };
+        if getrlimit(RLIMIT_NOFILE, &mut lim) == 0 && lim.rlim_cur < lim.rlim_max {
+            let old = lim.rlim_cur;
+            lim.rlim_cur = lim.rlim_max;
+            if setrlimit(RLIMIT_NOFILE, &lim) == 0 {
+                plog!("[fistbump] raised fd limit {} → {}", old, lim.rlim_max);
+            }
+        }
+    }
+}
+
 /// Start the proxy listeners (HTTP + SOCKS5) in background threads.
 pub fn start_proxy(ca: SharedCA, _app: Option<tauri::AppHandle>) {
+    #[cfg(unix)]
+    raise_fd_limit();
+
     // Ensure rustls has a crypto provider installed (required on iOS where
     // feature auto-detection doesn't work).
     let _ = rustls::crypto::ring::default_provider().install_default();
@@ -314,6 +338,7 @@ fn serve_pac(writer: &mut TcpStream) -> Result<(), BoxError> {
     let response = format!(
         "HTTP/1.1 200 OK\r\n\
          Content-Type: application/x-ns-proxy-autoconfig\r\n\
+         Cache-Control: max-age=3600\r\n\
          Content-Length: {}\r\n\
          Connection: close\r\n\r\n{}",
         body.len(),
