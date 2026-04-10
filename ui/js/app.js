@@ -1738,7 +1738,8 @@
     try {
       var res = await rpc('listtransactions', [10]);
       var el = document.getElementById('tx-list');
-      if (res.error || !res.result || !Array.isArray(res.result) || res.result.length === 0) {
+      if (res.error) return;
+      if (!res.result || !Array.isArray(res.result) || res.result.length === 0) {
         el.className = 'empty-state';
         el.textContent = 'No transactions yet';
         return;
