@@ -847,33 +847,45 @@ fn ipc_socket_path() -> std::path::PathBuf {
 }
 
 /// Build the cross-platform `Name` we use for both bind and connect.
-/// On Windows, interprocess resolves `"org.fistbump.wallet.extension"`
-/// to the named pipe `\\.\pipe\org.fistbump.wallet.extension`; on Unix
-/// we point it at the existing `~/.fistbump/extension.sock` so the
-/// file-system layout and permissions carry over unchanged from the
-/// macOS-only version.
+///
+/// On Unix we *always* use `GenericFilePath` pointing at the existing
+/// `~/.fistbump/extension.sock` path. On Windows we use
+/// `GenericNamespaced` which resolves to the named pipe
+/// `\\.\pipe\org.fistbump.wallet.extension`.
+///
+/// We deliberately *don't* feature-test via
+/// `GenericNamespaced::is_supported()` like the interprocess docs
+/// suggest — its `SpecialDirUdSocket` impl on macOS returns `true` from
+/// `is_supported()` and then resolves the name to a hardcoded
+/// `/tmp/<name>` path (see interprocess 2.4
+/// `os/unix/uds_local_socket.rs::tmpdir`), which (a) is in a
+/// world-writable directory rather than the per-user `~/.fistbump/`
+/// we want, (b) leaks across crashes because nothing cleans it up,
+/// and (c) silently disagrees with the path our `start_ipc_listener`
+/// stale-socket cleanup actually targets, so EADDRINUSE on every
+/// restart. Hard-cfgging the branch instead of trusting the runtime
+/// check sidesteps all of that.
 fn ipc_socket_name() -> std::io::Result<interprocess::local_socket::Name<'static>> {
-    use interprocess::local_socket::{prelude::*, GenericFilePath, GenericNamespaced};
+    use interprocess::local_socket::prelude::*;
 
-    if GenericNamespaced::is_supported() {
+    #[cfg(unix)]
+    {
+        use interprocess::local_socket::GenericFilePath;
+        ipc_socket_path()
+            .into_os_string()
+            .to_fs_name::<GenericFilePath>()
+    }
+    #[cfg(windows)]
+    {
+        use interprocess::local_socket::GenericNamespaced;
         "org.fistbump.wallet.extension".to_ns_name::<GenericNamespaced>()
-    } else {
-        #[cfg(unix)]
-        {
-            ipc_socket_path()
-                .into_os_string()
-                .to_fs_name::<GenericFilePath>()
-        }
-        #[cfg(not(unix))]
-        {
-            // Shouldn't be reachable — if GenericNamespaced isn't
-            // supported we're on Unix. Guard anyway so non-unix
-            // non-windows targets still compile.
-            Err(std::io::Error::new(
-                std::io::ErrorKind::Unsupported,
-                "no supported local socket namespace on this target",
-            ))
-        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "no supported local socket transport on this target",
+        ))
     }
 }
 
@@ -895,6 +907,19 @@ pub fn start_ipc_listener(app: AppHandle) {
             let _ = std::fs::create_dir_all(parent);
         }
         let _ = std::fs::remove_file(&socket_path);
+
+        // Migration cleanup: an earlier build of the wallet (briefly
+        // shipped) called interprocess with `GenericNamespaced` on
+        // macOS, which silently resolved to `/tmp/<name>` via
+        // SpecialDirUdSocket → tmpdir(). The stale socket file from
+        // that build can outlive every wallet restart and prevent
+        // legitimate filesystem-path binds elsewhere. Remove it so
+        // upgraders aren't stuck. Best-effort: any error here is
+        // benign because we're not using that path anymore anyway.
+        #[cfg(target_os = "macos")]
+        {
+            let _ = std::fs::remove_file("/tmp/org.fistbump.wallet.extension");
+        }
     }
 
     let name = match ipc_socket_name() {

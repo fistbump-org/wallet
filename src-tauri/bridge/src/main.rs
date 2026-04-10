@@ -35,33 +35,44 @@
 //!     That's the same threat-model trade-off the wallet makes for everything
 //!     else in `~/.fistbump/`.
 
-use interprocess::local_socket::{
-    prelude::*, GenericFilePath, GenericNamespaced, Name, Stream,
-};
+use interprocess::local_socket::{prelude::*, Name, Stream};
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-/// Build the `Name` we pass to `Stream::connect`. Matches the derivation
-/// in the wallet's `proxy::extension::ipc_socket_name` — Windows uses a
-/// named pipe by a fixed name, Unix uses the on-disk socket path.
+/// Build the `Name` we pass to `Stream::connect`. Mirrors the
+/// derivation in the wallet's `proxy::extension::ipc_socket_name`.
+///
+/// On Unix we *always* use `GenericFilePath` pointing at the existing
+/// `~/.fistbump/extension.sock` path. On Windows we use
+/// `GenericNamespaced` for the named pipe.
+///
+/// Importantly we hard-cfg the branches instead of feature-testing via
+/// `GenericNamespaced::is_supported()` — that helper returns `true` on
+/// macOS via interprocess's `SpecialDirUdSocket` impl, which silently
+/// resolves names to a hardcoded `/tmp/<name>` path that disagrees
+/// with the wallet's intended `~/.fistbump/extension.sock`. Both ends
+/// have to agree on the path or `Stream::connect` will hit the wrong
+/// file (or none at all).
 fn socket_name() -> std::io::Result<Name<'static>> {
-    if GenericNamespaced::is_supported() {
+    #[cfg(unix)]
+    {
+        use interprocess::local_socket::GenericFilePath;
+        socket_path()
+            .into_os_string()
+            .to_fs_name::<GenericFilePath>()
+    }
+    #[cfg(windows)]
+    {
+        use interprocess::local_socket::GenericNamespaced;
         "org.fistbump.wallet.extension".to_ns_name::<GenericNamespaced>()
-    } else {
-        #[cfg(unix)]
-        {
-            socket_path()
-                .into_os_string()
-                .to_fs_name::<GenericFilePath>()
-        }
-        #[cfg(not(unix))]
-        {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::Unsupported,
-                "no supported local socket namespace on this target",
-            ))
-        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "no supported local socket transport on this target",
+        ))
     }
 }
 
