@@ -390,6 +390,7 @@ class BrowserPresenter {
 class BrowserViewController: UIViewController, WKNavigationDelegate, UITextFieldDelegate {
     private var webView: WKWebView!
     private var urlField: UITextField!
+    private var clearButton: UIButton!
     private var progressBar: UIProgressView!
     private var backButton: UIButton!
     private var reloadButton: UIButton!
@@ -451,7 +452,22 @@ class BrowserViewController: UIViewController, WKNavigationDelegate, UITextField
     func load(url: URL) {
         showingError = false
         urlField.text = stripScheme(url.absoluteString)
+        updateClearButton()
         webView.load(URLRequest(url: url))
+    }
+
+    @objc private func onUrlTextChanged() {
+        updateClearButton()
+    }
+
+    @objc private func onClearUrl() {
+        urlField.text = ""
+        updateClearButton()
+        urlField.becomeFirstResponder()
+    }
+
+    private func updateClearButton() {
+        clearButton.isHidden = urlField.text?.isEmpty != false
     }
 
     private func buildUI() {
@@ -467,7 +483,12 @@ class BrowserViewController: UIViewController, WKNavigationDelegate, UITextField
         backButton.isEnabled = false
         toolbar.addSubview(backButton)
 
-        urlField = UITextField()
+        // Matches ui/css/style.css `.mobile-browser-input-wrap input`:
+        // height 36, padding 0 28 0 10, radius 6, font 15, #18181b fill,
+        // 1px #27272a border. A 3pt cyan glow around the whole field
+        // appears on focus (textFieldDidBeginEditing), matching the web's
+        // box-shadow: 0 0 0 3px rgba(87,199,237,0.1).
+        urlField = PaddedTextField(horizontalInset: 10, rightReserve: 28)
         urlField.placeholder = "Enter address..."
         urlField.textColor = textColor
         urlField.attributedPlaceholder = NSAttributedString(
@@ -475,7 +496,7 @@ class BrowserViewController: UIViewController, WKNavigationDelegate, UITextField
             attributes: [.foregroundColor: dimColor]
         )
         urlField.backgroundColor = inputBgColor
-        urlField.layer.cornerRadius = 8
+        urlField.layer.cornerRadius = 6
         urlField.layer.borderColor = borderColor.cgColor
         urlField.layer.borderWidth = 1
         urlField.font = .systemFont(ofSize: 15)
@@ -484,11 +505,29 @@ class BrowserViewController: UIViewController, WKNavigationDelegate, UITextField
         urlField.spellCheckingType = .no
         urlField.keyboardType = .URL
         urlField.returnKeyType = .go
-        urlField.clearButtonMode = .whileEditing
         urlField.delegate = self
-        urlField.setLeftPadding(12)
         urlField.translatesAutoresizingMaskIntoConstraints = false
         toolbar.addSubview(urlField)
+
+        // Custom clear button — same as Android, not the iOS default.
+        // 20x20 hit area, positioned 6pt from the field's right edge,
+        // visible only when the field has text.
+        let clearBtn = UIButton(type: .system)
+        let xConfig = UIImage.SymbolConfiguration(pointSize: 14, weight: .semibold)
+        clearBtn.setImage(UIImage(systemName: "xmark", withConfiguration: xConfig), for: .normal)
+        clearBtn.tintColor = mutedColor
+        clearBtn.addTarget(self, action: #selector(onClearUrl), for: .touchUpInside)
+        clearBtn.isHidden = true
+        clearBtn.translatesAutoresizingMaskIntoConstraints = false
+        urlField.addSubview(clearBtn)
+        NSLayoutConstraint.activate([
+            clearBtn.widthAnchor.constraint(equalToConstant: 20),
+            clearBtn.heightAnchor.constraint(equalToConstant: 20),
+            clearBtn.trailingAnchor.constraint(equalTo: urlField.trailingAnchor, constant: -6),
+            clearBtn.centerYAnchor.constraint(equalTo: urlField.centerYAnchor),
+        ])
+        self.clearButton = clearBtn
+        urlField.addTarget(self, action: #selector(onUrlTextChanged), for: .editingChanged)
 
         reloadButton = makeIconButton(systemName: "arrow.clockwise", action: #selector(onReload))
         toolbar.addSubview(reloadButton)
@@ -564,7 +603,7 @@ class BrowserViewController: UIViewController, WKNavigationDelegate, UITextField
             urlField.leadingAnchor.constraint(equalTo: backButton.trailingAnchor, constant: 6),
             urlField.trailingAnchor.constraint(equalTo: reloadButton.leadingAnchor, constant: -6),
             urlField.centerYAnchor.constraint(equalTo: toolbar.centerYAnchor),
-            urlField.heightAnchor.constraint(equalToConstant: 38),
+            urlField.heightAnchor.constraint(equalToConstant: 36),
 
             // Progress bar sits ON the toolbar's bottom edge, above the divider.
             progressBar.bottomAnchor.constraint(equalTo: toolbar.bottomAnchor),
@@ -616,6 +655,28 @@ class BrowserViewController: UIViewController, WKNavigationDelegate, UITextField
         }
         if let url = URL(string: input) { load(url: url) }
         return true
+    }
+
+    func textFieldDidBeginEditing(_ textField: UITextField) {
+        // Matches wallet ui/css/style.css:
+        //   border-color: var(--border-focus)   → #a1a1aa
+        //   box-shadow: 0 0 0 3px rgba(87,199,237,0.1)
+        let focusBorder = UIColor(red: 0xa1/255, green: 0xa1/255, blue: 0xaa/255, alpha: 1)
+        UIView.animate(withDuration: 0.15) {
+            textField.layer.borderColor = focusBorder.cgColor
+        }
+        textField.layer.shadowColor = accentColor.cgColor
+        textField.layer.shadowOpacity = 0.2
+        textField.layer.shadowRadius = 4
+        textField.layer.shadowOffset = .zero
+        textField.layer.masksToBounds = false
+    }
+
+    func textFieldDidEndEditing(_ textField: UITextField) {
+        UIView.animate(withDuration: 0.15) {
+            textField.layer.borderColor = self.borderColor.cgColor
+        }
+        textField.layer.shadowOpacity = 0
     }
 
     // MARK: - WKNavigationDelegate
@@ -748,10 +809,29 @@ class BrowserViewController: UIViewController, WKNavigationDelegate, UITextField
     deinit { progressObservation?.invalidate() }
 }
 
-private extension UITextField {
-    func setLeftPadding(_ amount: CGFloat) {
-        leftView = UIView(frame: CGRect(x: 0, y: 0, width: amount, height: 1))
-        leftViewMode = .always
+/// UITextField subclass that reserves insets on both sides. The right
+/// reserve is for the custom clear button (positioned as a subview at the
+/// right edge). Overrides all rect methods so caret/selection/placeholder
+/// all respect the padding.
+private class PaddedTextField: UITextField {
+    private let horizontalInset: CGFloat
+    private let rightReserve: CGFloat
+
+    init(horizontalInset: CGFloat, rightReserve: CGFloat) {
+        self.horizontalInset = horizontalInset
+        self.rightReserve = rightReserve
+        super.init(frame: .zero)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func textRect(forBounds bounds: CGRect) -> CGRect {
+        bounds.inset(by: UIEdgeInsets(top: 0, left: horizontalInset, bottom: 0, right: rightReserve))
+    }
+    override func editingRect(forBounds bounds: CGRect) -> CGRect {
+        textRect(forBounds: bounds)
+    }
+    override func placeholderRect(forBounds bounds: CGRect) -> CGRect {
+        textRect(forBounds: bounds)
     }
 }
 
