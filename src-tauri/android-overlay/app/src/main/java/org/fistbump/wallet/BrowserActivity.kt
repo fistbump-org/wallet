@@ -26,6 +26,7 @@ import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.ProgressBar
+import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
@@ -64,9 +65,19 @@ class BrowserActivity : AppCompatActivity() {
     private val accentColor = 0xFF22D3EE.toInt()
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
         dark = intent.getBooleanExtra(EXTRA_DARK, true)
+        // Force the system bar icon color to match our toolbar's theme.
+        // Auto follows the system UI mode, which can mismatch our toolbar
+        // if e.g. the phone is in light mode but the wallet runs dark —
+        // that would render dark status bar icons on a dark toolbar,
+        // making them invisible.
+        val barStyle = if (dark) {
+            SystemBarStyle.dark(Color.TRANSPARENT)
+        } else {
+            SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT)
+        }
+        enableEdgeToEdge(statusBarStyle = barStyle, navigationBarStyle = barStyle)
+        super.onCreate(savedInstanceState)
         val url = intent.getStringExtra(EXTRA_URL)
 
         setContentView(buildLayout())
