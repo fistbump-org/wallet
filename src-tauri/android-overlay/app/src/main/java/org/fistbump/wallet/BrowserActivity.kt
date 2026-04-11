@@ -3,22 +3,16 @@ package org.fistbump.wallet
 import android.annotation.SuppressLint
 import android.content.res.ColorStateList
 import android.graphics.Color
-import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
-import android.graphics.drawable.LayerDrawable
 import android.graphics.drawable.RippleDrawable
 import android.net.http.SslError
 import android.os.Bundle
-import android.text.Editable
 import android.text.InputType
-import android.text.TextWatcher
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.KeyEvent
-import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
-import androidx.core.content.ContextCompat
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.webkit.SslErrorHandler
@@ -102,11 +96,6 @@ class BrowserActivity : AppCompatActivity() {
         }.apply { isEnabled = false }
         toolbar.addView(backButton)
 
-        // Matches ui/css/style.css `.mobile-browser-input-wrap input`:
-        // height 36dp, padding 0 28 0 10, radius 6dp, font 15sp,
-        // #18181b fill, 1dp #27272a border. A 3dp cyan glow ring appears
-        // on focus (LayerDrawable outer ring, analogous to the web's
-        // box-shadow: 0 0 0 3px rgba(87,199,237,0.1)).
         urlInput = EditText(this).apply {
             hint = "Enter address..."
             setHintTextColor(dimColor)
@@ -116,15 +105,12 @@ class BrowserActivity : AppCompatActivity() {
             imeOptions = EditorInfo.IME_ACTION_GO
             setSingleLine(true)
             setSelectAllOnFocus(true)
-            // Left/right padding accounts for the glow ring inset (dp(3))
-            // plus the CSS spec's 10dp text inset and 6dp clear-button inset.
-            // The compound drawable (20dp X) is drawn at the right edge of
-            // the padding area, so paddingRight = 3dp ring + 6dp inset = 9dp.
-            setPadding(dp(13), dp(3), dp(9), dp(3))
-            compoundDrawablePadding = dp(8)
-            background = makeInputBackground(focused = false)
-            setOnFocusChangeListener { _, hasFocus ->
-                background = makeInputBackground(focused = hasFocus)
+            setPadding(dp(14), dp(8), dp(14), dp(8))
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = dp(8).toFloat()
+                setColor(inputBgColor)
+                setStroke(1, borderColor)
             }
             setOnEditorActionListener { _, actionId, event ->
                 val isEnter = actionId == EditorInfo.IME_ACTION_GO ||
@@ -132,10 +118,9 @@ class BrowserActivity : AppCompatActivity() {
                 if (isEnter) { navigate(text.toString()); true } else false
             }
             layoutParams = LinearLayout.LayoutParams(
-                0, dp(42), 1f  // 36dp input + 3dp glow ring on top & bottom
+                0, dp(38), 1f
             ).apply { marginStart = dp(6); marginEnd = dp(6) }
         }
-        attachClearButton(urlInput)
         toolbar.addView(urlInput)
 
         reloadButton = makeIconButton(R.drawable.ic_reload, "Reload") {
@@ -200,62 +185,6 @@ class BrowserActivity : AppCompatActivity() {
         )
 
         return root
-    }
-
-    // Reserves a 3dp-wide transparent region on each side for the
-    // focus glow ring, so that both the unfocused and focused states
-    // render the inner input at identical coordinates — no text reflow.
-    private fun makeInputBackground(focused: Boolean): Drawable {
-        val glowAlpha = 0x1A22D3EE.toInt()  // cyan at ~10% alpha
-        val focusBorder = 0xFFA1A1AA.toInt() // --border-focus from the CSS
-
-        val inner = GradientDrawable().apply {
-            shape = GradientDrawable.RECTANGLE
-            cornerRadius = dp(6).toFloat()
-            setColor(inputBgColor)
-            setStroke(1, if (focused) focusBorder else borderColor)
-        }
-        val outer = GradientDrawable().apply {
-            shape = GradientDrawable.RECTANGLE
-            cornerRadius = dp(9).toFloat()
-            setColor(if (focused) glowAlpha else Color.TRANSPARENT)
-        }
-        val layers = LayerDrawable(arrayOf(outer, inner))
-        layers.setLayerInset(1, dp(3), dp(3), dp(3), dp(3))
-        return layers
-    }
-
-    @SuppressLint("ClickableViewAccessibility")
-    private fun attachClearButton(input: EditText) {
-        val size = dp(20)
-        val clear = ContextCompat.getDrawable(this, R.drawable.ic_close)?.mutate()?.apply {
-            setBounds(0, 0, size, size)
-            setTint(mutedColor)
-        }
-        fun update() {
-            input.setCompoundDrawables(null, null, if (input.text.isNullOrEmpty()) null else clear, null)
-        }
-        input.addTextChangedListener(object : TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
-            override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
-            override fun afterTextChanged(s: Editable?) { update() }
-        })
-        input.setOnTouchListener { _, event ->
-            if (event.action == MotionEvent.ACTION_UP) {
-                val drawable = input.compoundDrawables[2] ?: return@setOnTouchListener false
-                val right = input.width - input.paddingEnd
-                val left = right - drawable.bounds.width()
-                if (event.x >= left - dp(8) && event.x <= right + dp(8)) {
-                    input.setText("")
-                    input.requestFocus()
-                    (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager)
-                        .showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
-                    return@setOnTouchListener true
-                }
-            }
-            false
-        }
-        update()
     }
 
     private fun makeIconButton(
