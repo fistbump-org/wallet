@@ -332,72 +332,338 @@ func registerBiometricFFI() {
     _registerBiometricHandlers(biometricAvailable, biometricSave, biometricLoad, biometricDelete)
 }
 
-// MARK: - Inline Browser (WKWebView)
+// MARK: - Modal Browser (WKWebView)
 
 @_silgen_name("register_browse_handler")
 private func _registerBrowseHandler(
-    _ show: @convention(c) (UnsafePointer<CChar>?, Double, Double, Double, Double, UInt8) -> Void,
-    _ hide: @convention(c) () -> Void
+    _ show: @convention(c) (UnsafePointer<CChar>?, UInt8) -> Void
 )
 
-private func browseShow(_ urlPtr: UnsafePointer<CChar>?, _ top: Double, _ left: Double, _ width: Double, _ height: Double, _ dark: UInt8) {
-    guard let urlPtr = urlPtr,
-          let urlStr = String(validatingUTF8: urlPtr),
-          let url = URL(string: urlStr) else { return }
-    let frame = CGRect(x: left, y: top, width: width, height: height)
+private func browseShow(_ urlPtr: UnsafePointer<CChar>?, _ dark: UInt8) {
+    let urlStr = urlPtr.flatMap { String(validatingUTF8: $0) } ?? ""
+    let url = urlStr.isEmpty ? nil : URL(string: urlStr)
     let isDark = dark != 0
     DispatchQueue.main.async {
-        InlineBrowser.shared.navigate(to: url, frame: frame, dark: isDark)
-    }
-}
-
-private func browseHide() {
-    DispatchQueue.main.async {
-        InlineBrowser.shared.hide()
-    }
-}
-
-@_silgen_name("register_browse_error_handler")
-private func _registerBrowseErrorHandler(
-    _ f: @convention(c) (Double, Double, Double, Double, UInt8, UnsafePointer<CChar>?, UnsafePointer<CChar>?, UnsafePointer<CChar>?) -> Void
-)
-
-private func browseShowError(_ top: Double, _ left: Double, _ width: Double, _ height: Double, _ dark: UInt8, _ badgePtr: UnsafePointer<CChar>?, _ titlePtr: UnsafePointer<CChar>?, _ msgPtr: UnsafePointer<CChar>?) {
-    let frame = CGRect(x: left, y: top, width: width, height: height)
-    let isDark = dark != 0
-    let badge = badgePtr.flatMap { String(validatingUTF8: $0) } ?? ""
-    let title = titlePtr.flatMap { String(validatingUTF8: $0) } ?? ""
-    let message = msgPtr.flatMap { String(validatingUTF8: $0) } ?? ""
-    DispatchQueue.main.async {
-        InlineBrowser.shared.showError(frame: frame, dark: isDark, badge: badge, title: title, message: message)
+        BrowserPresenter.shared.present(url: url, dark: isDark)
     }
 }
 
 func registerBrowseFFI() {
-    _registerBrowseHandler(browseShow, browseHide)
-    _registerBrowseErrorHandler(browseShowError)
+    _registerBrowseHandler(browseShow)
 }
 
-/// Manages a native WKWebView overlaid on the Tauri webview content area.
-/// Routes requests through the local DANE proxy and accepts the local CA cert.
-class InlineBrowser: NSObject, WKNavigationDelegate {
-    static let shared = InlineBrowser()
+/// Presents BrowserViewController modally. Keeps a weak reference so
+/// subsequent browse() calls reuse the already-on-screen controller
+/// and just navigate it instead of stacking modals.
+class BrowserPresenter {
+    static let shared = BrowserPresenter()
+    private weak var current: BrowserViewController?
 
-    private var webView: WKWebView?
+    func present(url: URL?, dark: Bool) {
+        guard let window = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .first?.windows.first,
+              let root = window.rootViewController else { return }
+
+        if let existing = current, existing.presentingViewController != nil {
+            if let url = url { existing.load(url: url) }
+            return
+        }
+
+        let vc = BrowserViewController(initialURL: url, dark: dark)
+        vc.modalPresentationStyle = .fullScreen
+        current = vc
+        // Walk to the deepest presented controller to avoid double-present errors.
+        var top = root
+        while let presented = top.presentedViewController { top = presented }
+        top.present(vc, animated: true)
+    }
+}
+
+/// Full-screen modal browser. Own toolbar (back / URL / close),
+/// own WKWebView, routes through the local SOCKS5 proxy and accepts
+/// the DANE proxy's minted certificates.
+class BrowserViewController: UIViewController, WKNavigationDelegate, UITextFieldDelegate {
+    private var webView: WKWebView!
+    private var urlField: UITextField!
+    private var progressBar: UIProgressView!
+    private var backButton: UIButton!
+    private let dark: Bool
+    private let initialURL: URL?
     private var showingError = false
-
-    /// Reference to the Tauri WKWebView so we can push URL updates into it.
-    private weak var tauriWebView: WKWebView?
-
-    /// The local CA certificate (for accepting DANE proxy's minted certs).
     private var caCert: SecCertificate?
+    private var progressObservation: NSKeyValueObservation?
+
+    init(initialURL: URL?, dark: Bool) {
+        self.initialURL = initialURL
+        self.dark = dark
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override var preferredStatusBarStyle: UIStatusBarStyle {
+        dark ? .lightContent : .darkContent
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        buildUI()
+        if let url = initialURL {
+            load(url: url)
+        } else {
+            urlField.becomeFirstResponder()
+        }
+    }
+
+    func load(url: URL) {
+        showingError = false
+        urlField.text = stripScheme(url.absoluteString)
+        webView.load(URLRequest(url: url))
+    }
+
+    private func buildUI() {
+        let bg = dark ? UIColor(red: 0x09/255, green: 0x09/255, blue: 0x0b/255, alpha: 1)
+                      : UIColor(red: 0xf4/255, green: 0xf4/255, blue: 0xf5/255, alpha: 1)
+        let bgToolbar = dark ? UIColor(red: 0x18/255, green: 0x18/255, blue: 0x1b/255, alpha: 1)
+                             : UIColor.white
+        let border = dark ? UIColor(red: 0x27/255, green: 0x27/255, blue: 0x2a/255, alpha: 1)
+                          : UIColor(red: 0xe4/255, green: 0xe4/255, blue: 0xe7/255, alpha: 1)
+        let textColor = dark ? UIColor(red: 0xe4/255, green: 0xe4/255, blue: 0xe7/255, alpha: 1)
+                             : UIColor(red: 0x18/255, green: 0x18/255, blue: 0x1b/255, alpha: 1)
+        let mutedColor = dark ? UIColor(red: 0x71/255, green: 0x71/255, blue: 0x7a/255, alpha: 1)
+                              : UIColor(red: 0xa1/255, green: 0xa1/255, blue: 0xaa/255, alpha: 1)
+        let inputBg = dark ? UIColor(red: 0x27/255, green: 0x27/255, blue: 0x2a/255, alpha: 1)
+                           : UIColor(red: 0xf4/255, green: 0xf4/255, blue: 0xf5/255, alpha: 1)
+        let accent = UIColor(red: 0x22/255, green: 0xd3/255, blue: 0xee/255, alpha: 1)
+
+        view.backgroundColor = bg
+
+        // Toolbar
+        let toolbar = UIView()
+        toolbar.backgroundColor = bgToolbar
+        toolbar.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(toolbar)
+
+        backButton = UIButton(type: .system)
+        backButton.setImage(UIImage(systemName: "chevron.left"), for: .normal)
+        backButton.tintColor = mutedColor
+        backButton.isEnabled = false
+        backButton.addTarget(self, action: #selector(onBack), for: .touchUpInside)
+        backButton.translatesAutoresizingMaskIntoConstraints = false
+        toolbar.addSubview(backButton)
+
+        urlField = UITextField()
+        urlField.placeholder = "Enter address..."
+        urlField.textColor = textColor
+        urlField.backgroundColor = inputBg
+        urlField.layer.cornerRadius = 8
+        urlField.font = .systemFont(ofSize: 15)
+        urlField.autocapitalizationType = .none
+        urlField.autocorrectionType = .no
+        urlField.spellCheckingType = .no
+        urlField.keyboardType = .URL
+        urlField.returnKeyType = .go
+        urlField.clearButtonMode = .whileEditing
+        urlField.delegate = self
+        urlField.setLeftPadding(10)
+        urlField.translatesAutoresizingMaskIntoConstraints = false
+        toolbar.addSubview(urlField)
+
+        let closeButton = UIButton(type: .system)
+        closeButton.setImage(UIImage(systemName: "xmark"), for: .normal)
+        closeButton.tintColor = mutedColor
+        closeButton.addTarget(self, action: #selector(onClose), for: .touchUpInside)
+        closeButton.translatesAutoresizingMaskIntoConstraints = false
+        toolbar.addSubview(closeButton)
+
+        // Divider
+        let divider = UIView()
+        divider.backgroundColor = border
+        divider.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(divider)
+
+        // Progress bar (on top of divider)
+        progressBar = UIProgressView(progressViewStyle: .bar)
+        progressBar.tintColor = accent
+        progressBar.trackTintColor = .clear
+        progressBar.alpha = 0
+        progressBar.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(progressBar)
+
+        // WebView
+        let config = WKWebViewConfiguration()
+        config.allowsInlineMediaPlayback = true
+        config.websiteDataStore = .nonPersistent()
+        if #available(iOS 17.0, *) {
+            let endpoint = NWEndpoint.hostPort(host: "127.0.0.1", port: 17351)
+            config.websiteDataStore.proxyConfigurations = [ProxyConfiguration(socksv5Proxy: endpoint)]
+        }
+        webView = WKWebView(frame: .zero, configuration: config)
+        webView.isOpaque = false
+        webView.backgroundColor = bg
+        webView.scrollView.backgroundColor = bg
+        webView.underPageBackgroundColor = bg
+        webView.navigationDelegate = self
+        webView.allowsBackForwardNavigationGestures = true
+        webView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(webView)
+
+        progressObservation = webView.observe(\.estimatedProgress, options: .new) { [weak self] wv, _ in
+            guard let self = self else { return }
+            let p = Float(wv.estimatedProgress)
+            self.progressBar.setProgress(p, animated: true)
+            UIView.animate(withDuration: 0.15) {
+                self.progressBar.alpha = (p > 0 && p < 1) ? 1 : 0
+            }
+            if p >= 1 { self.progressBar.setProgress(0, animated: false) }
+        }
+
+        let g = view.safeAreaLayoutGuide
+        NSLayoutConstraint.activate([
+            toolbar.topAnchor.constraint(equalTo: g.topAnchor),
+            toolbar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            toolbar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            toolbar.heightAnchor.constraint(equalToConstant: 48),
+
+            backButton.leadingAnchor.constraint(equalTo: toolbar.leadingAnchor, constant: 8),
+            backButton.centerYAnchor.constraint(equalTo: toolbar.centerYAnchor),
+            backButton.widthAnchor.constraint(equalToConstant: 36),
+            backButton.heightAnchor.constraint(equalToConstant: 36),
+
+            closeButton.trailingAnchor.constraint(equalTo: toolbar.trailingAnchor, constant: -8),
+            closeButton.centerYAnchor.constraint(equalTo: toolbar.centerYAnchor),
+            closeButton.widthAnchor.constraint(equalToConstant: 36),
+            closeButton.heightAnchor.constraint(equalToConstant: 36),
+
+            urlField.leadingAnchor.constraint(equalTo: backButton.trailingAnchor, constant: 6),
+            urlField.trailingAnchor.constraint(equalTo: closeButton.leadingAnchor, constant: -6),
+            urlField.centerYAnchor.constraint(equalTo: toolbar.centerYAnchor),
+            urlField.heightAnchor.constraint(equalToConstant: 34),
+
+            divider.topAnchor.constraint(equalTo: toolbar.bottomAnchor),
+            divider.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            divider.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            divider.heightAnchor.constraint(equalToConstant: 1),
+
+            progressBar.topAnchor.constraint(equalTo: divider.bottomAnchor),
+            progressBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            progressBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            progressBar.heightAnchor.constraint(equalToConstant: 2),
+
+            webView.topAnchor.constraint(equalTo: divider.bottomAnchor),
+            webView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            webView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            webView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+        ])
+    }
+
+    @objc private func onBack() {
+        if webView.canGoBack() { webView.goBack() }
+    }
+
+    @objc private func onClose() {
+        dismiss(animated: true)
+    }
+
+    func textFieldShouldReturn(_ textField: UITextField) -> Bool {
+        textField.resignFirstResponder()
+        var input = (textField.text ?? "").trimmingCharacters(in: .whitespaces)
+        if input.hasSuffix(".") { input = String(input.dropLast()) }
+        if input.isEmpty { return true }
+        if !input.hasPrefix("http://") && !input.hasPrefix("https://") {
+            input = "http://" + input
+        }
+        if let url = URL(string: input) { load(url: url) }
+        return true
+    }
+
+    // MARK: - WKNavigationDelegate
+
+    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        backButton.isEnabled = webView.canGoBack
+        guard let url = webView.url?.absoluteString,
+              !url.hasPrefix("fistbump://"),
+              !url.hasPrefix("about:") else { return }
+        if !urlField.isEditing { urlField.text = stripScheme(url) }
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        backButton.isEnabled = webView.canGoBack
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        handleNavigationError(error: error)
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        handleNavigationError(error: error)
+    }
+
+    private func handleNavigationError(error: Error) {
+        guard !showingError else { return }
+        showingError = true
+        let host = webView.url?.host ?? "this site"
+        let nsError = error as NSError
+        fbLog("[fistbump] browser error: code=\(nsError.code) host=\(host)")
+
+        let (badge, title, message): (String, String, String)
+        switch nsError.code {
+        case NSURLErrorTimedOut:
+            badge = "CONNECTION FAILED"; title = "No Response"
+            message = "The server for <strong>\(host)</strong> did not respond."
+        case NSURLErrorServerCertificateUntrusted,
+             NSURLErrorServerCertificateHasUnknownRoot,
+             NSURLErrorServerCertificateHasBadDate,
+             NSURLErrorServerCertificateNotYetValid:
+            badge = "CERTIFICATE ERROR"; title = "Certificate Not Valid"
+            message = "The SSL certificate for <strong>\(host)</strong> is not valid. The connection has been blocked."
+        case NSURLErrorSecureConnectionFailed:
+            badge = "SSL ERROR"; title = "Secure Connection Failed"
+            message = "Could not establish a secure connection to <strong>\(host)</strong>."
+        case NSURLErrorCannotFindHost:
+            badge = "NOT FOUND"; title = "Server Not Found"
+            message = "The server for <strong>\(host)</strong> could not be found."
+        case NSURLErrorCannotConnectToHost:
+            badge = "CONNECTION FAILED"; title = "Cannot Connect"
+            message = "Could not connect to the server for <strong>\(host)</strong>."
+        default:
+            badge = "DANE VALIDATION FAILED"; title = "Connection Not Secure"
+            message = "The certificate presented by <strong>\(host)</strong> does not match its on-chain TLSA record. The connection has been blocked."
+        }
+        webView.loadHTMLString(errorHtml(badge: badge, title: title, message: message),
+                               baseURL: URL(string: "fistbump://error"))
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+    ) {
+        guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
+              let serverTrust = challenge.protectionSpace.serverTrust else {
+            completionHandler(.performDefaultHandling, nil)
+            return
+        }
+        if let ca = loadCACert() {
+            SecTrustSetAnchorCertificates(serverTrust, [ca] as CFArray)
+            SecTrustSetAnchorCertificatesOnly(serverTrust, false)
+        }
+        var error: CFError?
+        if SecTrustEvaluateWithError(serverTrust, &error) {
+            completionHandler(.useCredential, URLCredential(trust: serverTrust))
+        } else {
+            completionHandler(.cancelAuthenticationChallenge, nil)
+        }
+    }
+
+    // MARK: - Helpers
 
     private func loadCACert() -> SecCertificate? {
         if let cached = caCert { return cached }
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
         let caPath = docs.appendingPathComponent(".fistbump/proxy-ca.crt")
         guard let pem = try? String(contentsOf: caPath, encoding: .utf8) else { return nil }
-        // Extract DER from PEM
         let lines = pem.components(separatedBy: "\n")
             .filter { !$0.hasPrefix("-----") && !$0.isEmpty }
         let base64 = lines.joined()
@@ -407,227 +673,45 @@ class InlineBrowser: NSObject, WKNavigationDelegate {
         return cert
     }
 
-    func navigate(to url: URL, frame: CGRect, dark: Bool) {
-        let bg = dark ? UIColor(red: 0x09/255, green: 0x09/255, blue: 0x0b/255, alpha: 1)
-                      : UIColor(red: 0xf4/255, green: 0xf4/255, blue: 0xf5/255, alpha: 1)
-
-        // Remove any existing webview — ensures no stale connections or cache.
-        if let wv = webView {
-            wv.removeFromSuperview()
-            webView = nil
-        }
-
-        guard let window = UIApplication.shared.connectedScenes
-            .compactMap({ $0 as? UIWindowScene })
-            .first?.windows.first,
-              let rootView = window.rootViewController?.view else { return }
-
-        // Find the Tauri WKWebView to send URL updates to.
-        tauriWebView = rootView.subviews.compactMap { $0 as? WKWebView }.first
-
-        let config = WKWebViewConfiguration()
-        config.allowsInlineMediaPlayback = true
-        // Use non-persistent storage — no cached connections or data between navigations.
-        config.websiteDataStore = .nonPersistent()
-
-        // Route all traffic through the local SOCKS5 proxy (handles both HTTP and HTTPS).
-        if #available(iOS 17.0, *) {
-            let endpoint = NWEndpoint.hostPort(host: "127.0.0.1", port: 17351)
-            let proxyConfig = ProxyConfiguration(socksv5Proxy: endpoint)
-            config.websiteDataStore.proxyConfigurations = [proxyConfig]
-        }
-
-        let wv = WKWebView(frame: frame, configuration: config)
-        wv.isOpaque = false
-        wv.backgroundColor = bg
-        wv.scrollView.backgroundColor = bg
-        wv.scrollView.contentInsetAdjustmentBehavior = .never
-        wv.underPageBackgroundColor = bg
-        wv.navigationDelegate = self
-
-        rootView.addSubview(wv)
-        self.webView = wv
-        showingError = false
-        wv.load(URLRequest(url: url))
+    private func stripScheme(_ url: String) -> String {
+        var s = url
+        if s.hasPrefix("https://") { s = String(s.dropFirst(8)) }
+        else if s.hasPrefix("http://") { s = String(s.dropFirst(7)) }
+        if s.hasSuffix("/") { s = String(s.dropLast()) }
+        return s
     }
 
-    func hide() {
-        webView?.removeFromSuperview()
-        webView = nil
-    }
-
-    func showError(frame: CGRect, dark: Bool, badge: String, title: String, message: String) {
-        // Remove existing webview
-        if let wv = webView {
-            wv.removeFromSuperview()
-            webView = nil
-        }
-
-        guard let window = UIApplication.shared.connectedScenes
-            .compactMap({ $0 as? UIWindowScene })
-            .first?.windows.first,
-              let rootView = window.rootViewController?.view else { return }
-
+    private func errorHtml(badge: String, title: String, message: String) -> String {
         let bg = dark ? "#09090b" : "#f4f4f5"
         let text = dark ? "#e4e4e7" : "#18181b"
         let muted = dark ? "#a1a1aa" : "#71717a"
         let badgeBg = dark ? "#7f1d1d" : "#fee2e2"
         let badgeText = dark ? "#fca5a5" : "#dc2626"
         let titleColor = dark ? "#f87171" : "#dc2626"
-
-        let html = """
-        <html><head><meta name="viewport" content="width=device-width,initial-scale=1">
-        <style>
-        html, body { height: 100%; margin: 0; }
-        body { font-family: -apple-system, sans-serif; background: \(bg); color: \(text);
-               display: flex; align-items: center; justify-content: center;
-               text-align: center; padding: 24px; box-sizing: border-box; }
-        .box { max-width: 360px; }
-        h2 { color: \(titleColor); font-size: 18px; margin: 0 0 12px; }
-        p { font-size: 14px; color: \(muted); line-height: 1.5; margin: 0; }
-        .badge { display: inline-block; background: \(badgeBg); color: \(badgeText); font-size: 11px;
-                 padding: 2px 8px; border-radius: 4px; margin-bottom: 16px; font-weight: 600; }
+        return """
+        <html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>
+        html,body{height:100%;margin:0}
+        body{font-family:-apple-system,sans-serif;background:\(bg);color:\(text);
+             display:flex;align-items:center;justify-content:center;
+             text-align:center;padding:24px;box-sizing:border-box}
+        .box{max-width:360px}
+        h2{color:\(titleColor);font-size:18px;margin:0 0 12px}
+        p{font-size:14px;color:\(muted);line-height:1.5;margin:0}
+        .badge{display:inline-block;background:\(badgeBg);color:\(badgeText);font-size:11px;
+               padding:2px 8px;border-radius:4px;margin-bottom:16px;font-weight:600}
         </style></head><body><div class="box">
-        <div class="badge">\(badge)</div>
-        <h2>\(title)</h2>
-        <p>\(message)</p>
+        <div class="badge">\(badge)</div><h2>\(title)</h2><p>\(message)</p>
         </div></body></html>
         """
-
-        let config = WKWebViewConfiguration()
-        let wv = WKWebView(frame: frame, configuration: config)
-        wv.isOpaque = true
-        let uiBg = dark ? UIColor(red: 0x09/255, green: 0x09/255, blue: 0x0b/255, alpha: 1)
-                        : UIColor(red: 0xf4/255, green: 0xf4/255, blue: 0xf5/255, alpha: 1)
-        wv.backgroundColor = uiBg
-        wv.scrollView.backgroundColor = uiBg
-        wv.scrollView.contentInsetAdjustmentBehavior = .never
-
-        rootView.addSubview(wv)
-        self.webView = wv
-        wv.loadHTMLString(html, baseURL: URL(string: "fistbump://error"))
     }
 
-    // MARK: - WKNavigationDelegate
+    deinit { progressObservation?.invalidate() }
+}
 
-    func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
-        // Show a loading spinner via injected JS
-        webView.evaluateJavaScript("""
-            if (!document.getElementById('_fb_spinner')) {
-                var d = document.createElement('div');
-                d.id = '_fb_spinner';
-                d.style.cssText = 'position:fixed;top:0;left:0;right:0;height:3px;z-index:99999;background:linear-gradient(90deg,transparent,#22d3ee,transparent);animation:_fbs 1s infinite';
-                var s = document.createElement('style');
-                s.textContent = '@keyframes _fbs{0%{transform:translateX(-100%)}100%{transform:translateX(100%)}}';
-                document.head.appendChild(s);
-                document.body.appendChild(d);
-            }
-        """)
-    }
-
-    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
-        // Remove loading spinner
-        webView.evaluateJavaScript("var e=document.getElementById('_fb_spinner');if(e)e.remove();")
-
-        guard let url = webView.url?.absoluteString,
-              !url.hasPrefix("fistbump://"),
-              !url.hasPrefix("about:") else { return }
-
-        // Check if this is a proxy error page (has <title>fistbump-error</title>)
-        let escaped = url.replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "'", with: "\\'")
-        webView.evaluateJavaScript("document.title") { result, _ in
-            if let title = result as? String, title == "fistbump-error" { return }
-            self.tauriWebView?.evaluateJavaScript(
-                "if(window._onBrowseURL)window._onBrowseURL('\(escaped)')"
-            )
-        }
-    }
-
-    /// Show an error page when navigation fails (e.g., DANE validation failure, no response, SSL error).
-    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-        handleNavigationError(webView: webView, error: error)
-    }
-
-    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-        handleNavigationError(webView: webView, error: error)
-    }
-
-    private func handleNavigationError(webView: WKWebView, error: Error) {
-        guard !showingError else { return }
-        showingError = true
-        let host = webView.url?.host ?? "this site"
-        let nsError = error as NSError
-        fbLog("[fistbump] browser error: code=\(nsError.code) domain=\(nsError.domain) host=\(host)")
-
-        let badge: String
-        let title: String
-        let message: String
-
-        switch nsError.code {
-        case NSURLErrorTimedOut:
-            badge = "CONNECTION FAILED"
-            title = "No Response"
-            message = "The server for <strong>\(host)</strong> did not respond."
-        case NSURLErrorServerCertificateUntrusted,
-             NSURLErrorServerCertificateHasUnknownRoot,
-             NSURLErrorServerCertificateHasBadDate,
-             NSURLErrorServerCertificateNotYetValid:
-            badge = "CERTIFICATE ERROR"
-            title = "Certificate Not Valid"
-            message = "The SSL certificate for <strong>\(host)</strong> is not valid. The connection has been blocked."
-        case NSURLErrorSecureConnectionFailed:
-            badge = "SSL ERROR"
-            title = "Secure Connection Failed"
-            message = "Could not establish a secure connection to <strong>\(host)</strong>."
-        case NSURLErrorCannotFindHost:
-            badge = "NOT FOUND"
-            title = "Server Not Found"
-            message = "The server for <strong>\(host)</strong> could not be found."
-        case NSURLErrorCannotConnectToHost:
-            badge = "CONNECTION FAILED"
-            title = "Cannot Connect"
-            message = "Could not connect to the server for <strong>\(host)</strong>."
-        default:
-            // Fistbump names going through the proxy — DANE failure drops the connection
-            badge = "DANE VALIDATION FAILED"
-            title = "Connection Not Secure"
-            message = "The certificate presented by <strong>\(host)</strong> does not match its on-chain TLSA record. The connection has been blocked."
-        }
-
-        let frame = webView.frame
-        showError(frame: frame, dark: true, badge: badge, title: title, message: message)
-    }
-
-    /// Accept the local DANE proxy's CA certificate for TLS connections.
-    func webView(
-        _ webView: WKWebView,
-        didReceive challenge: URLAuthenticationChallenge,
-        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
-    ) {
-        let host = challenge.protectionSpace.host
-        fbLog("[fistbump] TLS challenge for \(host) method=\(challenge.protectionSpace.authenticationMethod)")
-
-        guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
-              let serverTrust = challenge.protectionSpace.serverTrust else {
-            completionHandler(.performDefaultHandling, nil)
-            return
-        }
-
-        // Add our local CA cert to the trust evaluation.
-        if let ca = loadCACert() {
-            SecTrustSetAnchorCertificates(serverTrust, [ca] as CFArray)
-            SecTrustSetAnchorCertificatesOnly(serverTrust, false)
-        }
-
-        var error: CFError?
-        if SecTrustEvaluateWithError(serverTrust, &error) {
-            fbLog("[fistbump] TLS trust OK for \(host)")
-            completionHandler(.useCredential, URLCredential(trust: serverTrust))
-        } else {
-            fbLog("[fistbump] TLS trust FAILED for \(host): \(error?.localizedDescription ?? "unknown")")
-            completionHandler(.cancelAuthenticationChallenge, nil)
-        }
+private extension UITextField {
+    func setLeftPadding(_ amount: CGFloat) {
+        leftView = UIView(frame: CGRect(x: 0, y: 0, width: amount, height: 1))
+        leftViewMode = .always
     }
 }
 

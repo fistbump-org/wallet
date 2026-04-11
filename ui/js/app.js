@@ -55,48 +55,35 @@
   updateBrowseNavVisibility();
   window.addEventListener('resize', updateBrowseNavVisibility);
 
-  // Mobile tab bar (Wallet / Browser)
-  if (window.fistbump.mobile) {
-    var mobileBrowser = document.getElementById('mobile-browser');
-    var mobileTabs = document.querySelectorAll('.mobile-tab[data-mobile-tab]');
-    var browserUrlInput = document.getElementById('browser-url-input');
-    var browserSearchClear = document.getElementById('browser-search-clear');
-    var browserSearchLock = document.getElementById('browser-search-lock');
+  // Open the native modal browser. Clicking Browse anywhere (mobile tab bar,
+  // sidebar nav, or a programmatic call) routes through this — no inline
+  // panel, no overlay positioning, the native screen owns everything.
+  function openBrowser(url) {
+    var isDark = !document.body.classList.contains('light');
+    try {
+      __invoke('browse', { url: url || '', dark: isDark });
+    } catch(e) {
+      if (url) __invoke('open_external', { url: url });
+    }
+  }
 
+  // Mobile tab bar: Browse tab fires the modal without changing the active tab.
+  if (window.fistbump.mobile) {
+    var mobileTabs = document.querySelectorAll('.mobile-tab[data-mobile-tab]');
     mobileTabs.forEach(function(tab) {
       tab.addEventListener('click', function() {
         var target = tab.dataset.mobileTab;
+        if (target === 'browser') {
+          openBrowser();
+          return;
+        }
         mobileTabs.forEach(function(t) { t.classList.remove('active'); });
         tab.classList.add('active');
-        // Hide browser when leaving browser tab
-        if (target !== 'browser') {
-          document.getElementById('app').classList.remove('browse-active');
-          mobileBrowser.classList.remove('active');
-          mobileBrowser.classList.add('hidden');
-          // Move browser input back to its original location
-          var browserInputWrap = document.querySelector('.mobile-browser-input-wrap');
-          var browserBar = document.querySelector('.mobile-browser-bar');
-          if (browserInputWrap && browserBar) browserBar.appendChild(browserInputWrap);
-          try { __invoke('browse_hide'); } catch(e) {}
-          browserUrlInput.value = '';
-          browserSearchClear.classList.add('hidden');
-          browserSearchLock.classList.add('hidden');
-        }
-
-        if (target === 'browser') {
-          document.getElementById('app').classList.add('browse-active');
-          mobileBrowser.classList.add('active');
-          mobileBrowser.classList.remove('hidden');
-          // Move browser input into titlebar
-          var browserInputWrap = document.querySelector('.mobile-browser-input-wrap');
-          if (browserInputWrap) document.querySelector('.titlebar').appendChild(browserInputWrap);
-        } else if (target === 'settings') {
-          // Switch the wallet view to the settings page
+        if (target === 'settings') {
           document.querySelectorAll('.nav-item').forEach(function(b) { b.classList.remove('active'); });
           document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });
           document.getElementById('tab-settings').classList.add('active');
         } else {
-          // Wallet tab — always go to overview
           document.querySelectorAll('.nav-item').forEach(function(b) { b.classList.remove('active'); });
           document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });
           document.querySelector('.nav-item[data-tab="overview"]').classList.add('active');
@@ -104,49 +91,6 @@
         }
       });
     });
-
-    browserUrlInput.addEventListener('keydown', function(e) {
-      if (e.key === 'Enter') {
-        var val = browserUrlInput.value.trim().toLowerCase();
-        if (val) {
-          mobileBrowserNavigate(val);
-          browserUrlInput.blur();
-        }
-      }
-    });
-
-    browserSearchClear.addEventListener('click', function() {
-      browserUrlInput.value = '';
-      browserSearchClear.classList.add('hidden');
-      browserSearchLock.classList.add('hidden');
-      browserUrlInput.focus();
-    });
-
-    browserUrlInput.addEventListener('input', function() {
-      browserSearchClear.classList.toggle('hidden', !browserUrlInput.value);
-    });
-
-    browserUrlInput.addEventListener('focus', function() {
-      browserSearchLock.classList.add('hidden');
-    });
-
-    window._onBrowseURL = function(url) {
-      if (!url || url.startsWith('fistbump://')) return;
-      var display = url.replace(/^https?:\/\//, '').replace(/\/$/, '');
-      browserUrlInput.value = display;
-      browserSearchClear.classList.toggle('hidden', !display);
-      var isHttps = url.startsWith('https://');
-      var host = display.split('/')[0];
-      var hasDot = host.includes('.');
-      if (isHttps && hasDot) {
-        browserSearchLock.classList.remove('hidden', 'dane');
-      } else if (isHttps && !hasDot) {
-        browserSearchLock.classList.remove('hidden');
-        browserSearchLock.classList.add('dane');
-      } else {
-        browserSearchLock.classList.add('hidden');
-      }
-    };
   }
 
   // Set app version + wallet build hash, and pre-populate the bundled
@@ -1514,6 +1458,11 @@
   document.querySelectorAll('.nav-item[data-tab]').forEach(btn => {
     btn.addEventListener('click', async () => {
       closeSidebar();
+      // Browse: fire the modal native browser instead of switching tabs.
+      if (btn.dataset.tab === 'browse') {
+        openBrowser();
+        return;
+      }
       // If clicking the already-active tab, refresh data without transition
       if (btn.classList.contains('active') && !currentNameDetail) {
         try {
@@ -1536,21 +1485,9 @@
       document.querySelectorAll('.page').forEach(t => t.classList.remove('active'));
       btn.classList.add('active');
       document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
-      var wasBrowsing = browseActive;
-      browseActive = btn.dataset.tab === 'browse';
-      searchInput.placeholder = browseActive ? 'Enter address...' : 'Search name...';
-      searchInput.inputMode = browseActive ? 'url' : 'text';
       searchInput.value = '';
       updateSearchClear();
       searchLock.classList.add('hidden');
-      if (wasBrowsing) {
-        try { __invoke('browse_hide'); } catch(e) {}
-        document.body.style.overflow = '';
-        document.body.style.touchAction = '';
-        document.body.style.position = '';
-        document.body.style.width = '';
-        document.body.style.height = '';
-      }
       main.scrollTop = 0;
       document.querySelectorAll('main input:not([type=hidden]):not(#setting-miner-address), main textarea, main select:not(#setting-theme):not(#setting-loglevel)').forEach(el => {
         if (el.tagName === 'SELECT') el.selectedIndex = 0;
@@ -2507,13 +2444,8 @@
       const val = e.target.value.trim().toLowerCase().replace(/\.+$/, '');
       if (!val) return;
       searchInput.value = val;
-      if (browseActive) {
-        browserNavigate(val);
-        searchInput.blur();
-      } else {
-        searchInput.blur();
-        openNameDetail(val);
-      }
+      searchInput.blur();
+      openNameDetail(val);
     }
     if (e.key === 'Escape' && searchInput.value) {
       e.preventDefault();
@@ -2539,9 +2471,6 @@
     searchInput.focus();
   });
 
-  searchInput.addEventListener('focus', () => {
-    if (browseActive) searchLock.classList.add('hidden');
-  });
 
   document.addEventListener('click', (e) => {
     const link = e.target.closest('.name-link');
@@ -3866,115 +3795,10 @@
   });
 
   // ---- Browser ----
-
-  var browseActive = false;
+  // Browse now lives entirely in a native modal (see openBrowser above).
+  // Nothing to do here — search input is name-lookup only.
 
   var searchLock = document.getElementById('search-lock');
-
-  function updateBrowserUrl(url) {
-    if (!url || url.startsWith('fistbump://')) return;
-
-    // Strip protocol for display
-    var display = url.replace(/^https?:\/\//, '').replace(/\/$/, '');
-    searchInput.value = display;
-    updateSearchClear();
-
-    // Determine lock state
-    var isHttps = url.startsWith('https://');
-    var host = display.split('/')[0];
-    var hasDot = host.includes('.');
-
-    if (isHttps && hasDot) {
-      // ICANN domain with real HTTPS — green lock
-      searchLock.classList.remove('hidden', 'dane');
-    } else if (isHttps && !hasDot) {
-      // Fistbump name through DANE proxy — cyan lock
-      searchLock.classList.remove('hidden');
-      searchLock.classList.add('dane');
-    } else {
-      searchLock.classList.add('hidden');
-    }
-  }
-
-  // Called from native WebView when the URL changes (link clicks, redirects).
-  // On mobile, this is set in the mobile tab bar setup above.
-  if (!window.fistbump.mobile) {
-    window._onBrowseURL = function(url) {
-      if (browseActive) updateBrowserUrl(url);
-    };
-  }
-
-  async function browserNavigate(input) {
-    if (!input) return;
-    var url = input.replace(/\.+$/, '').toLowerCase();
-    // Default to http — let the server redirect to https if it wants.
-    // All traffic goes through the SOCKS5 proxy which handles DNS resolution
-    // for fistbump names and DANE validation for HTTPS connections.
-    if (!/^https?:\/\//i.test(url)) {
-      url = 'http://' + url;
-    }
-
-    // Measure the content area (main element) for native webview positioning.
-    // On Android, convert to physical pixels in JS to avoid density mismatch.
-    var main = document.querySelector('main');
-    var rect = main.getBoundingClientRect();
-    var dpr = window.devicePixelRatio || 1;
-
-    // Disable all scrolling/touch while native browser is visible
-    document.body.style.overflow = 'hidden';
-    document.body.style.touchAction = 'none';
-    document.body.style.position = 'fixed';
-    document.body.style.width = '100%';
-    document.body.style.height = '100%';
-
-    // Show the name without lock while loading — lock appears on successful page load
-    searchInput.value = input.replace(/\.+$/, '').toLowerCase();
-    updateSearchClear();
-    searchLock.classList.add('hidden');
-
-    try {
-      // Android native views use physical pixels; iOS uses points (= CSS px).
-      var scale = window.fistbump.platform === 'android' ? dpr : 1;
-      var effectiveHeight = rect.height;
-      await __invoke('browse', {
-        url: url,
-        top: Math.round(rect.top * scale),
-        left: Math.round(rect.left * scale),
-        width: Math.round(rect.width * scale),
-        height: Math.round(effectiveHeight * scale),
-        dark: !document.body.classList.contains('light'),
-      });
-    } catch(e) {
-      // Fallback: open in system browser
-      __invoke('open_external', { url: url });
-    }
-  }
-
-  async function mobileBrowserNavigate(input) {
-    if (!input) return;
-    var url = input.replace(/\.+$/, '').toLowerCase();
-    if (!/^https?:\/\//i.test(url)) {
-      url = 'http://' + url;
-    }
-    var area = document.getElementById('mobile-browser-content');
-    var rect = area.getBoundingClientRect();
-    var dpr = window.devicePixelRatio || 1;
-    try {
-      // iOS uses CSS points (scale=1); Android needs physical pixels (scale=dpr).
-      var scale = window.fistbump.platform === 'android' ? dpr : 1;
-      await __invoke('browse', {
-        url: url,
-        top: Math.round(rect.top * scale),
-        left: Math.round(rect.left * scale),
-        width: Math.round(rect.width * scale),
-        height: Math.round(rect.height * scale),
-        dark: !document.body.classList.contains('light'),
-      });
-    } catch(e) {
-      __invoke('open_external', { url: url });
-    }
-  }
-
 
   // ---- Log ----
 

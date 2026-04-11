@@ -428,32 +428,28 @@ pub extern "C" fn start_dane_proxy() {
     proxy::start_proxy(ca, None);
 }
 
-type BrowseFn = unsafe extern "C" fn(*const std::ffi::c_char, f64, f64, f64, f64, u8);
-type BrowseHideFn = unsafe extern "C" fn();
+type BrowseFn = unsafe extern "C" fn(*const std::ffi::c_char, u8);
 
 static BROWSE_HANDLER: std::sync::OnceLock<BrowseFn> = std::sync::OnceLock::new();
-static BROWSE_HIDE_HANDLER: std::sync::OnceLock<BrowseHideFn> = std::sync::OnceLock::new();
 
 #[no_mangle]
-pub extern "C" fn register_browse_handler(show: BrowseFn, hide: BrowseHideFn) {
+pub extern "C" fn register_browse_handler(show: BrowseFn) {
     let _ = BROWSE_HANDLER.set(show);
-    let _ = BROWSE_HIDE_HANDLER.set(hide);
 }
 
 #[tauri::command]
-fn browse(app: tauri::AppHandle, url: String, top: f64, left: f64, width: f64, height: f64, dark: bool, header_height: Option<f64>, tab_bar_height: Option<f64>) -> Result<(), String> {
-    // iOS: use native WKWebView via FFI
+fn browse(app: tauri::AppHandle, url: String, dark: bool) -> Result<(), String> {
+    // iOS: present a modal WKWebView via FFI
     if let Some(f) = BROWSE_HANDLER.get() {
         let c_str = std::ffi::CString::new(url).map_err(|e| e.to_string())?;
-        unsafe { f(c_str.as_ptr(), top, left, width, height, if dark { 1 } else { 0 }); }
+        unsafe { f(c_str.as_ptr(), if dark { 1 } else { 0 }); }
         return Ok(());
     }
 
-    // Android: use the CSS rect (already in physical pixels) directly
+    // Android: launch the full-screen BrowserActivity
     #[cfg(target_os = "android")]
     {
-        let _ = (header_height, tab_bar_height);
-        browse_android::browse(&url, top as i32, left as i32, width as i32, height as i32, dark);
+        browse_android::browse(&url, dark);
         return Ok(());
     }
 
@@ -480,41 +476,6 @@ fn browse(app: tauri::AppHandle, url: String, top: f64, left: f64, width: f64, h
 
     let _ = app;
     Ok(())
-}
-
-type BrowseErrorFn = unsafe extern "C" fn(f64, f64, f64, f64, u8, *const std::ffi::c_char, *const std::ffi::c_char, *const std::ffi::c_char);
-
-static BROWSE_ERROR_HANDLER: std::sync::OnceLock<BrowseErrorFn> = std::sync::OnceLock::new();
-
-#[no_mangle]
-pub extern "C" fn register_browse_error_handler(f: BrowseErrorFn) {
-    let _ = BROWSE_ERROR_HANDLER.set(f);
-}
-
-#[tauri::command]
-fn browse_error(top: f64, left: f64, width: f64, height: f64, dark: bool, badge: String, title: String, message: String, header_height: Option<f64>, tab_bar_height: Option<f64>) {
-    if let Some(f) = BROWSE_ERROR_HANDLER.get() {
-        let b = std::ffi::CString::new(badge).unwrap_or_default();
-        let t = std::ffi::CString::new(title).unwrap_or_default();
-        let m = std::ffi::CString::new(message).unwrap_or_default();
-        unsafe { f(top, left, width, height, if dark { 1 } else { 0 }, b.as_ptr(), t.as_ptr(), m.as_ptr()); }
-        return;
-    }
-    #[cfg(target_os = "android")]
-    {
-        let _ = (header_height, tab_bar_height);
-        browse_android::browse_error(top as i32, left as i32, width as i32, height as i32, dark, &badge, &title, &message);
-    }
-}
-
-#[tauri::command]
-fn browse_hide() {
-    if let Some(f) = BROWSE_HIDE_HANDLER.get() {
-        unsafe { f(); }
-        return;
-    }
-    #[cfg(target_os = "android")]
-    browse_android::hide();
 }
 
 // ── QR Scanner ──
@@ -1313,7 +1274,7 @@ mod browse_android {
         super::biometric_android::JAVA_VM.get()
     }
 
-    pub fn browse(url: &str, top: i32, left: i32, width: i32, height: i32, dark: bool) {
+    pub fn browse(url: &str, dark: bool) {
         let vm = match get_vm() { Some(v) => v, None => return };
         let mut env = match vm.attach_current_thread() { Ok(e) => e, Err(_) => return };
         let cls = match env.find_class("org/fistbump/wallet/BrowserBridge") {
@@ -1321,37 +1282,9 @@ mod browse_android {
         };
         let jurl = match env.new_string(url) { Ok(s) => s, Err(_) => return };
         let _ = env.call_static_method(
-            cls, "browse", "(Ljava/lang/String;IIIIZ)V",
-            &[JValue::Object(&jurl), JValue::Int(top), JValue::Int(left),
-              JValue::Int(width), JValue::Int(height), JValue::Bool(dark as u8)],
+            cls, "browse", "(Ljava/lang/String;Z)V",
+            &[JValue::Object(&jurl), JValue::Bool(dark as u8)],
         );
-    }
-
-    pub fn browse_error(top: i32, left: i32, width: i32, height: i32, dark: bool,
-                        badge: &str, title: &str, message: &str) {
-        let vm = match get_vm() { Some(v) => v, None => return };
-        let mut env = match vm.attach_current_thread() { Ok(e) => e, Err(_) => return };
-        let cls = match env.find_class("org/fistbump/wallet/BrowserBridge") {
-            Ok(c) => c, Err(_) => return,
-        };
-        let jb = match env.new_string(badge) { Ok(s) => s, Err(_) => return };
-        let jt = match env.new_string(title) { Ok(s) => s, Err(_) => return };
-        let jm = match env.new_string(message) { Ok(s) => s, Err(_) => return };
-        let _ = env.call_static_method(
-            cls, "browseError",
-            "(IIIIZLjava/lang/String;Ljava/lang/String;Ljava/lang/String;)V",
-            &[JValue::Int(top), JValue::Int(left), JValue::Int(width), JValue::Int(height),
-              JValue::Bool(dark as u8), JValue::Object(&jb), JValue::Object(&jt), JValue::Object(&jm)],
-        );
-    }
-
-    pub fn hide() {
-        let vm = match get_vm() { Some(v) => v, None => return };
-        let mut env = match vm.attach_current_thread() { Ok(e) => e, Err(_) => return };
-        let cls = match env.find_class("org/fistbump/wallet/BrowserBridge") {
-            Ok(c) => c, Err(_) => return,
-        };
-        let _ = env.call_static_method(cls, "hide", "()V", &[]);
     }
 }
 
@@ -1832,8 +1765,6 @@ pub fn run() {
             get_fbd_bundled_hash,
             open_external,
             browse,
-            browse_error,
-            browse_hide,
             scan_qr,
             scan_qr_stop,
             get_settings,
