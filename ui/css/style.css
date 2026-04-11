@@ -13,6 +13,10 @@
   --red: var(--fb-red);
   --yellow: var(--fb-yellow);
   --radius: var(--fb-radius-lg);
+  --sat: env(safe-area-inset-top, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
+  --sal: env(safe-area-inset-left, 0px);
+  --sar: env(safe-area-inset-right, 0px);
 }
 body.light {
   --bg: #f4f4f5;
@@ -88,10 +92,10 @@ body.light {
 /* Login */
 .login-screen {
   position: fixed;
-  top: env(safe-area-inset-top, 0px);
+  top: var(--sat);
   left: 0;
   right: 0;
-  bottom: env(safe-area-inset-bottom, 0px);
+  bottom: var(--sab);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -107,8 +111,8 @@ body.light {
   top: 0;
   left: 0;
   right: 0;
-  height: calc(40px + env(safe-area-inset-top, 0px));
-  padding-top: env(safe-area-inset-top, 0px);
+  height: calc(40px + var(--sat));
+  padding-top: var(--sat);
   display: flex;
   align-items: center;
   justify-content: flex-end;
@@ -378,8 +382,8 @@ html, body {
 .titlebar {
   display: flex;
   align-items: center;
-  height: calc(40px + env(safe-area-inset-top, 0px));
-  padding-top: env(safe-area-inset-top, 0px);
+  height: calc(40px + var(--sat));
+  padding-top: var(--sat);
   background: var(--bg);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
@@ -1687,7 +1691,7 @@ body[data-platform="android"] #settings-resolving {
 
 /* Toast */
 .toast-container {
-  position: fixed; top: calc(16px + env(safe-area-inset-top, 0px)); right: calc(16px + env(safe-area-inset-right, 0px)); z-index: 9999;
+  position: fixed; top: calc(16px + var(--sat)); right: calc(16px + var(--sar)); z-index: 9999;
   display: flex; flex-direction: column; gap: 8px;
   pointer-events: none;
 }
@@ -1773,9 +1777,9 @@ body[data-platform="android"] #settings-resolving {
   /* Titlebar: logo + status + search + hamburger.
      Fixed height so it doesn't shift when hamburger is hidden (browse mode). */
   .titlebar {
-    height: calc(env(safe-area-inset-top, 0px) + 84px);
+    height: calc(var(--sat) + 84px);
     padding: 0 16px 8px;
-    padding-top: calc(env(safe-area-inset-top, 0px) + 4px);
+    padding-top: calc(var(--sat) + 4px);
     border-bottom: 1px solid var(--border);
   
     gap: 8px;
@@ -1823,8 +1827,8 @@ body[data-platform="android"] #settings-resolving {
     background: var(--bg);
     transform: translateX(100%);
     transition: transform 0.25s ease;
-    padding-top: calc(env(safe-area-inset-top, 0px) + 48px);
-    padding-bottom: env(safe-area-inset-bottom, 0px);
+    padding-top: calc(var(--sat) + 48px);
+    padding-bottom: var(--sab);
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
   }
@@ -1927,7 +1931,7 @@ body[data-platform="android"] #settings-resolving {
     max-height: 92vh;
     border-radius: 16px 16px 0 0;
     padding: 24px 20px;
-    padding-bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+    padding-bottom: calc(20px + var(--sab));
     animation: mobileSlideUp 0.25s ease-out;
   }
 
@@ -1951,8 +1955,8 @@ body[data-platform="android"] #settings-resolving {
 
   /* Login screen */
   .login-screen {
-    padding-top: env(safe-area-inset-top, 0px);
-    padding-bottom: env(safe-area-inset-bottom, 0px);
+    padding-top: var(--sat);
+    padding-bottom: var(--sab);
   }
 
   .login-card {
@@ -2100,7 +2104,7 @@ body[data-platform="android"] #settings-resolving {
     flex-shrink: 0;
     border-top: 1px solid var(--border);
     background: var(--bg);
-    padding-bottom: env(safe-area-inset-bottom, 0px);
+    padding-bottom: var(--sab);
   }
   .mobile-tab {
     flex: 1;
@@ -2132,7 +2136,7 @@ body[data-platform="android"] #settings-resolving {
   }
   .mobile-browser-bar {
     padding: 0 16px 8px;
-    padding-top: calc(env(safe-area-inset-top, 0px) + 8px);
+    padding-top: calc(var(--sat) + 8px);
     background: var(--bg);
     border-bottom: 1px solid var(--border);
   }

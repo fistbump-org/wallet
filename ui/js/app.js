@@ -3950,23 +3950,18 @@
     if (!/^https?:\/\//i.test(url)) {
       url = 'http://' + url;
     }
-    var browserBar = document.querySelector('.mobile-browser-bar');
-    var tabBar = document.getElementById('mobile-tab-bar');
     var area = document.getElementById('mobile-browser-content');
     var rect = area.getBoundingClientRect();
     var dpr = window.devicePixelRatio || 1;
     try {
+      // iOS uses CSS points (scale=1); Android needs physical pixels (scale=dpr).
       var scale = window.fistbump.platform === 'android' ? dpr : 1;
       await __invoke('browse', {
         url: url,
-        // iOS: CSS point coordinates
         top: Math.round(rect.top * scale),
         left: Math.round(rect.left * scale),
         width: Math.round(rect.width * scale),
         height: Math.round(rect.height * scale),
-        // Android: element heights so Kotlin can compute layout from native screen/insets
-        headerHeight: Math.round(browserBar.offsetHeight * scale),
-        tabBarHeight: Math.round(tabBar.offsetHeight * scale),
         dark: !document.body.classList.contains('light'),
       });
     } catch(e) {
@@ -4551,6 +4546,7 @@
       isLight = theme === 'light';
     }
     document.body.classList.toggle('light', isLight);
+    window.FistbumpBars?.setLightMode(isLight);
   }
 
   const themeSelect = document.getElementById('setting-theme');

@@ -449,12 +449,11 @@ fn browse(app: tauri::AppHandle, url: String, top: f64, left: f64, width: f64, h
         return Ok(());
     }
 
-    // Android: compute layout from native screen dimensions + safe area insets
+    // Android: use the CSS rect (already in physical pixels) directly
     #[cfg(target_os = "android")]
     {
-        let hh = header_height.unwrap_or(0.0) as i32;
-        let tbh = tab_bar_height.unwrap_or(0.0) as i32;
-        browse_android::browse(&url, hh, tbh, dark);
+        let _ = (header_height, tab_bar_height);
+        browse_android::browse(&url, top as i32, height as i32, dark);
         return Ok(());
     }
 
@@ -503,9 +502,8 @@ fn browse_error(top: f64, left: f64, width: f64, height: f64, dark: bool, badge:
     }
     #[cfg(target_os = "android")]
     {
-        let hh = header_height.unwrap_or(0.0) as i32;
-        let tbh = tab_bar_height.unwrap_or(0.0) as i32;
-        browse_android::browse_error(hh, tbh, dark, &badge, &title, &message);
+        let _ = (header_height, tab_bar_height);
+        browse_android::browse_error(top as i32, height as i32, dark, &badge, &title, &message);
     }
 }
 
@@ -1315,7 +1313,7 @@ mod browse_android {
         super::biometric_android::JAVA_VM.get()
     }
 
-    pub fn browse(url: &str, header_height: i32, tab_bar_height: i32, dark: bool) {
+    pub fn browse(url: &str, top: i32, height: i32, dark: bool) {
         let vm = match get_vm() { Some(v) => v, None => return };
         let mut env = match vm.attach_current_thread() { Ok(e) => e, Err(_) => return };
         let cls = match env.find_class("org/fistbump/wallet/BrowserBridge") {
@@ -1324,12 +1322,12 @@ mod browse_android {
         let jurl = match env.new_string(url) { Ok(s) => s, Err(_) => return };
         let _ = env.call_static_method(
             cls, "browse", "(Ljava/lang/String;IIZ)V",
-            &[JValue::Object(&jurl), JValue::Int(header_height),
-              JValue::Int(tab_bar_height), JValue::Bool(dark as u8)],
+            &[JValue::Object(&jurl), JValue::Int(top),
+              JValue::Int(height), JValue::Bool(dark as u8)],
         );
     }
 
-    pub fn browse_error(header_height: i32, tab_bar_height: i32, dark: bool,
+    pub fn browse_error(top: i32, height: i32, dark: bool,
                         badge: &str, title: &str, message: &str) {
         let vm = match get_vm() { Some(v) => v, None => return };
         let mut env = match vm.attach_current_thread() { Ok(e) => e, Err(_) => return };
@@ -1342,7 +1340,7 @@ mod browse_android {
         let _ = env.call_static_method(
             cls, "browseError",
             "(IIZLjava/lang/String;Ljava/lang/String;Ljava/lang/String;)V",
-            &[JValue::Int(header_height), JValue::Int(tab_bar_height),
+            &[JValue::Int(top), JValue::Int(height),
               JValue::Bool(dark as u8), JValue::Object(&jb), JValue::Object(&jt), JValue::Object(&jm)],
         );
     }
