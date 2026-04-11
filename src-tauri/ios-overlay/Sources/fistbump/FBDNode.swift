@@ -371,7 +371,11 @@ class BrowserPresenter {
         }
 
         let vc = BrowserViewController(initialURL: url, dark: dark)
-        vc.modalPresentationStyle = .fullScreen
+        // .overFullScreen (not .fullScreen) keeps the underlying Tauri
+        // WKWebView attached to the window hierarchy, so its SSE socket to
+        // fbd stays alive while the modal is up. BrowserViewController
+        // paints its own opaque background so it still looks fully modal.
+        vc.modalPresentationStyle = .overFullScreen
         current = vc
         // Walk to the deepest presented controller to avoid double-present errors.
         var top = root

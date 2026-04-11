@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+        Translucent variant so the underlying MainActivity is kept in
+        the paused (not stopped) state while the browser is visible.
+        This prevents the Tauri WebView from suspending its SSE socket
+        to fbd, which would otherwise force a reconnect on close.
+
+        BrowserActivity paints its own opaque background, so the user
+        still sees a fully solid modal.
+    -->
+    <style name="Theme.fistbump.BrowserModal" parent="Theme.fistbump">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowAnimationStyle">@android:style/Animation.Activity</item>
+    </style>
+</resources>

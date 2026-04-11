@@ -33,7 +33,7 @@
         <activity
             android:name=".BrowserActivity"
             android:exported="false"
-            android:theme="@style/Theme.fistbump"
+            android:theme="@style/Theme.fistbump.BrowserModal"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode" />
 
         <provider
