@@ -388,11 +388,39 @@ class BrowserViewController: UIViewController, WKNavigationDelegate, UITextField
     private var urlField: UITextField!
     private var progressBar: UIProgressView!
     private var backButton: UIButton!
+    private var reloadButton: UIButton!
     private let dark: Bool
     private let initialURL: URL?
     private var showingError = false
     private var caCert: SecCertificate?
     private var progressObservation: NSKeyValueObservation?
+
+    // Wallet palette (matches ui/css/style.css dark theme + Android BrowserActivity)
+    private var bgColor: UIColor {
+        dark ? UIColor(red: 0x09/255, green: 0x09/255, blue: 0x0b/255, alpha: 1)
+             : UIColor(red: 0xf4/255, green: 0xf4/255, blue: 0xf5/255, alpha: 1)
+    }
+    private var borderColor: UIColor {
+        dark ? UIColor(red: 0x27/255, green: 0x27/255, blue: 0x2a/255, alpha: 1)
+             : UIColor(red: 0xe4/255, green: 0xe4/255, blue: 0xe7/255, alpha: 1)
+    }
+    private var inputBgColor: UIColor {
+        dark ? UIColor(red: 0x18/255, green: 0x18/255, blue: 0x1b/255, alpha: 1)
+             : UIColor.white
+    }
+    private var textColor: UIColor {
+        dark ? UIColor(red: 0xe4/255, green: 0xe4/255, blue: 0xe7/255, alpha: 1)
+             : UIColor(red: 0x18/255, green: 0x18/255, blue: 0x1b/255, alpha: 1)
+    }
+    private var mutedColor: UIColor {
+        dark ? UIColor(red: 0xa1/255, green: 0xa1/255, blue: 0xaa/255, alpha: 1)
+             : UIColor(red: 0x71/255, green: 0x71/255, blue: 0x7a/255, alpha: 1)
+    }
+    private var dimColor: UIColor {
+        dark ? UIColor(red: 0x52/255, green: 0x52/255, blue: 0x5b/255, alpha: 1)
+             : UIColor(red: 0xa1/255, green: 0xa1/255, blue: 0xaa/255, alpha: 1)
+    }
+    private let accentColor = UIColor(red: 0x22/255, green: 0xd3/255, blue: 0xee/255, alpha: 1)
 
     init(initialURL: URL?, dark: Bool) {
         self.initialURL = initialURL
@@ -423,41 +451,29 @@ class BrowserViewController: UIViewController, WKNavigationDelegate, UITextField
     }
 
     private func buildUI() {
-        let bg = dark ? UIColor(red: 0x09/255, green: 0x09/255, blue: 0x0b/255, alpha: 1)
-                      : UIColor(red: 0xf4/255, green: 0xf4/255, blue: 0xf5/255, alpha: 1)
-        let bgToolbar = dark ? UIColor(red: 0x18/255, green: 0x18/255, blue: 0x1b/255, alpha: 1)
-                             : UIColor.white
-        let border = dark ? UIColor(red: 0x27/255, green: 0x27/255, blue: 0x2a/255, alpha: 1)
-                          : UIColor(red: 0xe4/255, green: 0xe4/255, blue: 0xe7/255, alpha: 1)
-        let textColor = dark ? UIColor(red: 0xe4/255, green: 0xe4/255, blue: 0xe7/255, alpha: 1)
-                             : UIColor(red: 0x18/255, green: 0x18/255, blue: 0x1b/255, alpha: 1)
-        let mutedColor = dark ? UIColor(red: 0x71/255, green: 0x71/255, blue: 0x7a/255, alpha: 1)
-                              : UIColor(red: 0xa1/255, green: 0xa1/255, blue: 0xaa/255, alpha: 1)
-        let inputBg = dark ? UIColor(red: 0x27/255, green: 0x27/255, blue: 0x2a/255, alpha: 1)
-                           : UIColor(red: 0xf4/255, green: 0xf4/255, blue: 0xf5/255, alpha: 1)
-        let accent = UIColor(red: 0x22/255, green: 0xd3/255, blue: 0xee/255, alpha: 1)
+        view.backgroundColor = bgColor
 
-        view.backgroundColor = bg
-
-        // Toolbar
+        // Toolbar — blends with bg, divided only by a thin bottom border
         let toolbar = UIView()
-        toolbar.backgroundColor = bgToolbar
+        toolbar.backgroundColor = bgColor
         toolbar.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(toolbar)
 
-        backButton = UIButton(type: .system)
-        backButton.setImage(UIImage(systemName: "chevron.left"), for: .normal)
-        backButton.tintColor = mutedColor
+        backButton = makeIconButton(systemName: "chevron.left", action: #selector(onBack))
         backButton.isEnabled = false
-        backButton.addTarget(self, action: #selector(onBack), for: .touchUpInside)
-        backButton.translatesAutoresizingMaskIntoConstraints = false
         toolbar.addSubview(backButton)
 
         urlField = UITextField()
         urlField.placeholder = "Enter address..."
         urlField.textColor = textColor
-        urlField.backgroundColor = inputBg
+        urlField.attributedPlaceholder = NSAttributedString(
+            string: "Enter address...",
+            attributes: [.foregroundColor: dimColor]
+        )
+        urlField.backgroundColor = inputBgColor
         urlField.layer.cornerRadius = 8
+        urlField.layer.borderColor = borderColor.cgColor
+        urlField.layer.borderWidth = 1
         urlField.font = .systemFont(ofSize: 15)
         urlField.autocapitalizationType = .none
         urlField.autocorrectionType = .no
@@ -466,26 +482,26 @@ class BrowserViewController: UIViewController, WKNavigationDelegate, UITextField
         urlField.returnKeyType = .go
         urlField.clearButtonMode = .whileEditing
         urlField.delegate = self
-        urlField.setLeftPadding(10)
+        urlField.setLeftPadding(12)
         urlField.translatesAutoresizingMaskIntoConstraints = false
         toolbar.addSubview(urlField)
 
-        let closeButton = UIButton(type: .system)
-        closeButton.setImage(UIImage(systemName: "xmark"), for: .normal)
-        closeButton.tintColor = mutedColor
-        closeButton.addTarget(self, action: #selector(onClose), for: .touchUpInside)
-        closeButton.translatesAutoresizingMaskIntoConstraints = false
+        reloadButton = makeIconButton(systemName: "arrow.clockwise", action: #selector(onReload))
+        toolbar.addSubview(reloadButton)
+
+        let closeButton = makeIconButton(systemName: "xmark", action: #selector(onClose))
         toolbar.addSubview(closeButton)
 
         // Divider
         let divider = UIView()
-        divider.backgroundColor = border
+        divider.backgroundColor = borderColor
         divider.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(divider)
 
-        // Progress bar (on top of divider)
+        // Progress bar — pinned to the bottom edge of the toolbar (above the
+        // divider) so it never shifts layout when it appears/disappears.
         progressBar = UIProgressView(progressViewStyle: .bar)
-        progressBar.tintColor = accent
+        progressBar.tintColor = accentColor
         progressBar.trackTintColor = .clear
         progressBar.alpha = 0
         progressBar.translatesAutoresizingMaskIntoConstraints = false
@@ -501,9 +517,9 @@ class BrowserViewController: UIViewController, WKNavigationDelegate, UITextField
         }
         webView = WKWebView(frame: .zero, configuration: config)
         webView.isOpaque = false
-        webView.backgroundColor = bg
-        webView.scrollView.backgroundColor = bg
-        webView.underPageBackgroundColor = bg
+        webView.backgroundColor = bgColor
+        webView.scrollView.backgroundColor = bgColor
+        webView.underPageBackgroundColor = bgColor
         webView.navigationDelegate = self
         webView.allowsBackForwardNavigationGestures = true
         webView.translatesAutoresizingMaskIntoConstraints = false
@@ -524,32 +540,38 @@ class BrowserViewController: UIViewController, WKNavigationDelegate, UITextField
             toolbar.topAnchor.constraint(equalTo: g.topAnchor),
             toolbar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             toolbar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            toolbar.heightAnchor.constraint(equalToConstant: 48),
+            toolbar.heightAnchor.constraint(equalToConstant: 52),
 
             backButton.leadingAnchor.constraint(equalTo: toolbar.leadingAnchor, constant: 8),
             backButton.centerYAnchor.constraint(equalTo: toolbar.centerYAnchor),
-            backButton.widthAnchor.constraint(equalToConstant: 36),
-            backButton.heightAnchor.constraint(equalToConstant: 36),
+            backButton.widthAnchor.constraint(equalToConstant: 40),
+            backButton.heightAnchor.constraint(equalToConstant: 40),
 
             closeButton.trailingAnchor.constraint(equalTo: toolbar.trailingAnchor, constant: -8),
             closeButton.centerYAnchor.constraint(equalTo: toolbar.centerYAnchor),
-            closeButton.widthAnchor.constraint(equalToConstant: 36),
-            closeButton.heightAnchor.constraint(equalToConstant: 36),
+            closeButton.widthAnchor.constraint(equalToConstant: 40),
+            closeButton.heightAnchor.constraint(equalToConstant: 40),
+
+            reloadButton.trailingAnchor.constraint(equalTo: closeButton.leadingAnchor, constant: 0),
+            reloadButton.centerYAnchor.constraint(equalTo: toolbar.centerYAnchor),
+            reloadButton.widthAnchor.constraint(equalToConstant: 40),
+            reloadButton.heightAnchor.constraint(equalToConstant: 40),
 
             urlField.leadingAnchor.constraint(equalTo: backButton.trailingAnchor, constant: 6),
-            urlField.trailingAnchor.constraint(equalTo: closeButton.leadingAnchor, constant: -6),
+            urlField.trailingAnchor.constraint(equalTo: reloadButton.leadingAnchor, constant: -6),
             urlField.centerYAnchor.constraint(equalTo: toolbar.centerYAnchor),
-            urlField.heightAnchor.constraint(equalToConstant: 34),
+            urlField.heightAnchor.constraint(equalToConstant: 38),
+
+            // Progress bar sits ON the toolbar's bottom edge, above the divider.
+            progressBar.bottomAnchor.constraint(equalTo: toolbar.bottomAnchor),
+            progressBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            progressBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            progressBar.heightAnchor.constraint(equalToConstant: 2),
 
             divider.topAnchor.constraint(equalTo: toolbar.bottomAnchor),
             divider.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             divider.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             divider.heightAnchor.constraint(equalToConstant: 1),
-
-            progressBar.topAnchor.constraint(equalTo: divider.bottomAnchor),
-            progressBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            progressBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            progressBar.heightAnchor.constraint(equalToConstant: 2),
 
             webView.topAnchor.constraint(equalTo: divider.bottomAnchor),
             webView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
@@ -558,8 +580,22 @@ class BrowserViewController: UIViewController, WKNavigationDelegate, UITextField
         ])
     }
 
+    private func makeIconButton(systemName: String, action: Selector) -> UIButton {
+        let btn = UIButton(type: .system)
+        let config = UIImage.SymbolConfiguration(pointSize: 18, weight: .medium)
+        btn.setImage(UIImage(systemName: systemName, withConfiguration: config), for: .normal)
+        btn.tintColor = mutedColor
+        btn.addTarget(self, action: action, for: .touchUpInside)
+        btn.translatesAutoresizingMaskIntoConstraints = false
+        return btn
+    }
+
+    @objc private func onReload() {
+        webView.reload()
+    }
+
     @objc private func onBack() {
-        if webView.canGoBack() { webView.goBack() }
+        if webView.canGoBack { webView.goBack() }
     }
 
     @objc private func onClose() {
