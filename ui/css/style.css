@@ -172,7 +172,9 @@ body.light {
   font-size: 14px;
   font-weight: 500;
 }
-.wallet-item:hover { border-color: var(--accent); }
+@media (hover: hover) {
+  .wallet-item:hover { border-color: var(--accent); }
+}
 .wallet-item .wallet-arrow { color: var(--text-muted); font-size: 16px; }
 .login-actions {
   display: flex;
@@ -449,7 +451,9 @@ html, body {
   border-radius: 50%;
   line-height: 1;
 }
-.search-clear:hover { color: var(--text); }
+@media (hover: hover) {
+  .search-clear:hover { color: var(--text); }
+}
 .search-clear.hidden { display: none; }
 .titlebar-search input {
   -webkit-user-select: text;
@@ -498,8 +502,10 @@ html, body {
   justify-content: center;
   transition: background 0.12s, color 0.12s;
 }
-.tb-btn:hover { background: var(--bg-raised); color: var(--text); }
-.tb-close:hover { background: #dc2626; color: #fff; }
+@media (hover: hover) {
+  .tb-btn:hover { background: var(--bg-raised); color: var(--text); }
+  .tb-close:hover { background: #dc2626; color: #fff; }
+}
 
 /* App Body */
 .app-body {
@@ -531,7 +537,9 @@ nav { flex: 1; display: flex; flex-direction: column; gap: 2px; padding: 8px 10p
   cursor: pointer;
   transition: all 0.12s;
 }
-.nav-item:hover { color: var(--text-secondary); background: var(--bg-raised); }
+@media (hover: hover) {
+  .nav-item:hover { color: var(--text-secondary); background: var(--bg-raised); }
+}
 .nav-item.active { color: var(--text); background: var(--bg-raised); }
 .nav-sep { height: 1px; background: var(--border); margin: 4px 12px; }
 .nav-spacer { flex: 1; }
@@ -804,7 +812,9 @@ body.light .modal-card {
   padding: 0 4px;
   line-height: 1;
 }
-.close-btn:hover { color: var(--text); background: none; }
+@media (hover: hover) {
+  .close-btn:hover { color: var(--text); background: none; }
+}
 .recv-actions {
   display: flex;
   gap: 10px;
@@ -830,7 +840,9 @@ body.light .modal-card {
   cursor: pointer;
   transition: all 0.12s;
 }
-.filter-btn:hover { color: var(--text-secondary); border-color: var(--border-focus); background: none; }
+@media (hover: hover) {
+  .filter-btn:hover { color: var(--text-secondary); border-color: var(--border-focus); background: none; }
+}
 .filter-btn.active { color: var(--text); background: var(--bg-raised); border-color: var(--accent); }
 .search-row {
   display: flex;
@@ -956,7 +968,9 @@ body.light .modal-card {
   font-size: 16px;
   padding: 0 4px;
 }
-.record-delete:hover, .record-delete-sub:hover { color: var(--red, #e55); }
+@media (hover: hover) {
+  .record-delete:hover, .record-delete-sub:hover { color: var(--red, #e55); }
+}
 .record-delete-sub {
   cursor: pointer;
   color: var(--text-muted);
@@ -1050,11 +1064,17 @@ body.light .modal-card {
 
 /* Override .btn with wallet local vars for light mode support */
 .btn { background: var(--bg-raised); border-color: var(--border); color: var(--text); border-radius: var(--radius); }
-.btn:hover { border-color: var(--border-focus); background: var(--bg-input); color: var(--text); }
+@media (hover: hover) {
+  .btn:hover { border-color: var(--border-focus); background: var(--bg-input); color: var(--text); }
+}
 .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-.btn.primary:hover { background: var(--accent-hover); }
+@media (hover: hover) {
+  .btn.primary:hover { background: var(--accent-hover); }
+}
 .btn.danger { background: var(--red); border-color: var(--red); color: #fff; }
-.btn.danger:hover { background: #b91c1c; border-color: #b91c1c; }
+@media (hover: hover) {
+  .btn.danger:hover { background: #b91c1c; border-color: #b91c1c; }
+}
 .mono-sm {
   font-family: var(--fb-font-mono);
   font-size: 12px;
@@ -1071,7 +1091,9 @@ body.light .modal-card {
   cursor: pointer;
   transition: all 0.12s;
 }
-.small-btn:hover { color: var(--text); border-color: var(--border-focus); }
+@media (hover: hover) {
+  .small-btn:hover { color: var(--text); border-color: var(--border-focus); }
+}
 
 /* Section Card */
 .section-card {
@@ -1117,7 +1139,9 @@ body.light .modal-card {
   white-space: nowrap;
 }
 a.tx-link { color: var(--accent); }
-a.tx-link:hover { text-decoration: underline; }
+@media (hover: hover) {
+  a.tx-link:hover { text-decoration: underline; }
+}
 .tx-time { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
 .tx-amount { font-variant-numeric: tabular-nums; font-size: 13px; flex-shrink: 0; }
 .tx-amount.positive { color: var(--green); }
@@ -1579,7 +1603,9 @@ a.tx-link:hover { text-decoration: underline; }
 }
 .names-table tr:last-child td { border-bottom: none; }
 .names-table a { color: var(--accent); }
-.names-table a:hover { text-decoration: underline; }
+@media (hover: hover) {
+  .names-table a:hover { text-decoration: underline; }
+}
 .bids-table { table-layout: auto; width: 100%; }
 .bids-table th:nth-child(1), .bids-table td:nth-child(1) { white-space: nowrap; }
 .bids-table th:nth-child(4), .bids-table td:nth-child(4) { white-space: nowrap; }
@@ -1608,7 +1634,9 @@ a.tx-link:hover { text-decoration: underline; }
 }
 .name-item:last-child { border-bottom: none; }
 .name-item a { color: var(--accent); }
-.name-item a:hover { text-decoration: underline; }
+@media (hover: hover) {
+  .name-item a:hover { text-decoration: underline; }
+}
 /* Explorer link in name detail title */
 .name-explorer-link {
   font-size: 12px;
@@ -1617,7 +1645,9 @@ a.tx-link:hover { text-decoration: underline; }
   text-decoration: none;
   margin-left: 8px;
 }
-.name-explorer-link:hover { color: var(--accent); }
+@media (hover: hover) {
+  .name-explorer-link:hover { color: var(--accent); }
+}
 
 /* Action notice in name detail */
 .action-notice { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; font-size: var(--fb-text-sm); }
@@ -1718,7 +1748,9 @@ body[data-platform="android"] #settings-resolving {
   border: 1px solid var(--accent); border-radius: 6px;
   transition: background 0.15s;
 }
-.toast-btn:hover { background: rgba(87,199,237,0.1); }
+@media (hover: hover) {
+  .toast-btn:hover { background: rgba(87,199,237,0.1); }
+}
 @keyframes toast-in { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: translateX(0); } }
 @keyframes toast-out { to { opacity: 0; transform: translateX(20px); } }
 
@@ -1738,7 +1770,9 @@ body[data-platform="android"] #settings-resolving {
   flex-shrink: 0;
   transition: background 0.12s, color 0.12s;
 }
-.hamburger-btn:hover { background: var(--bg-raised); color: var(--text); }
+@media (hover: hover) {
+  .hamburger-btn:hover { background: var(--bg-raised); color: var(--text); }
+}
 
 /* Sidebar backdrop — hidden on desktop */
 .sidebar-backdrop {
