@@ -1,17 +1,22 @@
 package org.fistbump.wallet
 
 import android.annotation.SuppressLint
-import android.content.Intent
+import android.content.res.ColorStateList
 import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.RippleDrawable
 import android.net.http.SslError
 import android.os.Bundle
+import android.text.Editable
 import android.text.InputType
+import android.text.TextWatcher
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
-import android.view.WindowManager
+import androidx.core.content.ContextCompat
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.webkit.SslErrorHandler
@@ -50,7 +55,17 @@ class BrowserActivity : AppCompatActivity() {
     private lateinit var urlInput: EditText
     private lateinit var progressBar: ProgressBar
     private lateinit var backButton: ImageButton
+    private lateinit var reloadButton: ImageButton
     private var dark: Boolean = true
+
+    // Wallet palette — matches ui/css/style.css dark theme
+    private val bgColor get() = if (dark) 0xFF09090B.toInt() else 0xFFF4F4F5.toInt()
+    private val borderColor get() = if (dark) 0xFF27272A.toInt() else 0xFFE4E4E7.toInt()
+    private val inputBgColor get() = if (dark) 0xFF18181B.toInt() else 0xFFFFFFFF.toInt()
+    private val textColor get() = if (dark) 0xFFE4E4E7.toInt() else 0xFF18181B.toInt()
+    private val mutedColor get() = if (dark) 0xFFA1A1AA.toInt() else 0xFF71717A.toInt()
+    private val dimColor get() = if (dark) 0xFF52525B.toInt() else 0xFFA1A1AA.toInt()
+    private val accentColor = 0xFF22D3EE.toInt()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -62,125 +77,197 @@ class BrowserActivity : AppCompatActivity() {
         applyInsets()
         configureWebView()
         applyProxyThenLoad(url)
+        if (url.isNullOrBlank()) urlInput.requestFocus()
     }
 
     private fun buildLayout(): View {
-        val bg = if (dark) Color.parseColor("#09090b") else Color.parseColor("#f4f4f5")
-        val bgToolbar = if (dark) Color.parseColor("#18181b") else Color.parseColor("#ffffff")
-        val border = if (dark) Color.parseColor("#27272a") else Color.parseColor("#e4e4e7")
-        val textColor = if (dark) Color.parseColor("#e4e4e7") else Color.parseColor("#18181b")
-        val mutedColor = if (dark) Color.parseColor("#71717a") else Color.parseColor("#a1a1aa")
-        val accentColor = Color.parseColor("#22d3ee")
-
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(bg)
+            setBackgroundColor(bgColor)
             fitsSystemWindows = false
         }
 
-        // ── Toolbar row ──────────────────────────────────────────
+        // ── Toolbar ── (blends with bg, separated only by a thin bottom border)
         val toolbar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setBackgroundColor(bgToolbar)
+            setBackgroundColor(bgColor)
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(8), dp(6), dp(8), dp(6))
+            setPadding(dp(8), dp(8), dp(8), dp(8))
         }
 
-        backButton = ImageButton(this).apply {
-            setImageResource(android.R.drawable.ic_media_previous)
-            background = null
-            setColorFilter(mutedColor)
-            contentDescription = "Back"
-            isEnabled = false
-            setOnClickListener { if (webView.canGoBack()) webView.goBack() }
-            layoutParams = LinearLayout.LayoutParams(dp(40), dp(40))
-        }
+        backButton = makeIconButton(R.drawable.ic_arrow_left, "Back") {
+            if (webView.canGoBack()) webView.goBack()
+        }.apply { isEnabled = false }
         toolbar.addView(backButton)
 
         urlInput = EditText(this).apply {
             hint = "Enter address..."
-            setHintTextColor(mutedColor)
+            setHintTextColor(dimColor)
             setTextColor(textColor)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
             inputType = InputType.TYPE_TEXT_VARIATION_URI or InputType.TYPE_CLASS_TEXT
             imeOptions = EditorInfo.IME_ACTION_GO
-            background = null
             setSingleLine(true)
-            setPadding(dp(12), dp(8), dp(12), dp(8))
-            isSelectAllOnFocus = true
+            setSelectAllOnFocus(true)
+            setPadding(dp(14), dp(8), dp(14), dp(8))
+            compoundDrawablePadding = dp(8)
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = dp(8).toFloat()
+                setColor(inputBgColor)
+                setStroke(1, borderColor)
+            }
             setOnEditorActionListener { _, actionId, event ->
                 val isEnter = actionId == EditorInfo.IME_ACTION_GO ||
                     event?.keyCode == KeyEvent.KEYCODE_ENTER
                 if (isEnter) { navigate(text.toString()); true } else false
             }
             layoutParams = LinearLayout.LayoutParams(
-                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f
-            ).apply { marginStart = dp(4); marginEnd = dp(4) }
+                0, dp(38), 1f
+            ).apply { marginStart = dp(6); marginEnd = dp(6) }
         }
+        attachClearButton(urlInput)
         toolbar.addView(urlInput)
 
-        val closeButton = ImageButton(this).apply {
-            setImageResource(android.R.drawable.ic_menu_close_clear_cancel)
-            background = null
-            setColorFilter(mutedColor)
-            contentDescription = "Close"
-            setOnClickListener { finish() }
-            layoutParams = LinearLayout.LayoutParams(dp(40), dp(40))
+        reloadButton = makeIconButton(R.drawable.ic_reload, "Reload") {
+            webView.reload()
+        }
+        toolbar.addView(reloadButton)
+
+        val closeButton = makeIconButton(R.drawable.ic_close, "Close") {
+            finish()
         }
         toolbar.addView(closeButton)
 
+        // Wrap toolbar so the progress bar can overlay its bottom edge without
+        // pushing the webview down.
+        progressBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 100
+            progress = 0
+            visibility = View.GONE
+            progressTintList = ColorStateList.valueOf(accentColor)
+            progressBackgroundTintList = ColorStateList.valueOf(Color.TRANSPARENT)
+        }
+        val toolbarWrap = FrameLayout(this).apply {
+            addView(
+                toolbar,
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.WRAP_CONTENT
+                )
+            )
+            addView(
+                progressBar,
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    dp(2),
+                    Gravity.BOTTOM
+                )
+            )
+        }
         root.addView(
-            toolbar,
+            toolbarWrap,
             LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             )
         )
 
-        // ── Progress bar (thin line under toolbar) ──────────────
-        progressBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
-            max = 100
-            progress = 0
-            visibility = View.GONE
-            progressTintList = android.content.res.ColorStateList.valueOf(accentColor)
-        }
-        root.addView(
-            progressBar,
-            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(2))
-        )
-
-        // Toolbar bottom border
-        val divider = View(this).apply { setBackgroundColor(border) }
+        // Thin bottom border below the toolbar
+        val divider = View(this).apply { setBackgroundColor(borderColor) }
         root.addView(divider, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 1))
 
-        // ── WebView ─────────────────────────────────────────────
+        // ── WebView ──
         webView = WebView(this).apply {
-            setBackgroundColor(bg)
+            setBackgroundColor(bgColor)
         }
         root.addView(
             webView,
-            LinearLayout.LayoutParams(0, 0, 1f).apply {
-                width = LinearLayout.LayoutParams.MATCH_PARENT
-                height = 0
-            }
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                0,
+                1f
+            )
         )
 
         return root
     }
 
+    @SuppressLint("ClickableViewAccessibility")
+    private fun attachClearButton(input: EditText) {
+        val size = dp(16)
+        val clear = ContextCompat.getDrawable(this, R.drawable.ic_close)?.mutate()?.apply {
+            setBounds(0, 0, size, size)
+            setTint(mutedColor)
+        }
+        fun update() {
+            input.setCompoundDrawables(null, null, if (input.text.isNullOrEmpty()) null else clear, null)
+        }
+        input.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun afterTextChanged(s: Editable?) { update() }
+        })
+        input.setOnTouchListener { _, event ->
+            if (event.action == MotionEvent.ACTION_UP) {
+                val drawable = input.compoundDrawables[2] ?: return@setOnTouchListener false
+                val right = input.width - input.paddingEnd
+                val left = right - drawable.bounds.width()
+                if (event.x >= left - dp(8) && event.x <= right + dp(8)) {
+                    input.setText("")
+                    input.requestFocus()
+                    (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager)
+                        .showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
+                    return@setOnTouchListener true
+                }
+            }
+            false
+        }
+        update()
+    }
+
+    private fun makeIconButton(
+        drawableRes: Int,
+        desc: String,
+        onClick: () -> Unit
+    ): ImageButton {
+        val size = dp(40)
+        val rippleMask = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(Color.WHITE)
+        }
+        return ImageButton(this).apply {
+            setImageResource(drawableRes)
+            imageTintList = ColorStateList.valueOf(mutedColor)
+            background = RippleDrawable(
+                ColorStateList.valueOf(
+                    if (dark) 0x22FFFFFF.toInt() else 0x22000000.toInt()
+                ),
+                null,
+                rippleMask
+            )
+            contentDescription = desc
+            scaleType = android.widget.ImageView.ScaleType.CENTER_INSIDE
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+            layoutParams = LinearLayout.LayoutParams(size, size)
+            setOnClickListener { onClick() }
+        }
+    }
+
     private fun applyInsets() {
-        // Pad the toolbar for the status bar, and the webview for the nav bar.
         val root = findViewById<ViewGroup>(android.R.id.content).getChildAt(0) as LinearLayout
         ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
             val bars = insets.getInsets(
                 WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
             )
-            val toolbar = root.getChildAt(0)
+            // Toolbar is the first child (FrameLayout wrap), its first child is the
+            // actual toolbar LinearLayout that carries the padding.
+            val toolbar = (root.getChildAt(0) as ViewGroup).getChildAt(0)
             toolbar.setPadding(
-                toolbar.paddingLeft + bars.left,
-                dp(6) + bars.top,
-                toolbar.paddingRight + bars.right,
-                dp(6)
+                dp(8) + bars.left,
+                dp(8) + bars.top,
+                dp(8) + bars.right,
+                dp(8)
             )
             webView.setPadding(bars.left, 0, bars.right, bars.bottom)
             insets
