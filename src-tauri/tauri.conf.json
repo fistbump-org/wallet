@@ -4,8 +4,8 @@
   "identifier": "org.fistbump.wallet",
   "build": {
     "frontendDist": "../ui",
-    "beforeDevCommand": "node -e \"['src-tauri/target/debug/fbd','src-tauri/target/debug/fbd.exe'].forEach(f=>{try{require('fs').unlinkSync(f)}catch{}})\"",
-    "beforeBuildCommand": "node src-tauri/build-bridge.mjs && node -e \"['src-tauri/target/release/fbd','src-tauri/target/release/fbd.exe','src-tauri/target/universal-apple-darwin/release/fbd'].forEach(f=>{try{require('fs').unlinkSync(f)}catch{}})\""
+    "beforeDevCommand": "node src-tauri/sync-android-overlay.mjs && node -e \"['src-tauri/target/debug/fbd','src-tauri/target/debug/fbd.exe'].forEach(f=>{try{require('fs').unlinkSync(f)}catch{}})\"",
+    "beforeBuildCommand": "node src-tauri/sync-android-overlay.mjs && node src-tauri/build-bridge.mjs && node -e \"['src-tauri/target/release/fbd','src-tauri/target/release/fbd.exe','src-tauri/target/universal-apple-darwin/release/fbd'].forEach(f=>{try{require('fs').unlinkSync(f)}catch{}})\""
   },
   "app": {
     "windows": [
