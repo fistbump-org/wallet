@@ -44,10 +44,16 @@
   });
   sidebarBackdrop.addEventListener('click', closeSidebar);
 
-  // Browse: phones use the mobile tab bar, tablets use the sidebar nav item
-  if ((window.fistbump.platform === 'ios' || window.fistbump.platform === 'android') && window.innerWidth > 768) {
-    document.getElementById('nav-browse').classList.remove('hidden');
+  // Browse: phones use the mobile tab bar, tablets use the sidebar nav item.
+  // Re-evaluate on resize so rotating an Android/iPad tablet between portrait
+  // (< 768 = mobile tab bar) and landscape (≥ 768 = sidebar) swaps correctly.
+  function updateBrowseNavVisibility() {
+    var isMobilePlatform = window.fistbump.platform === 'ios' || window.fistbump.platform === 'android';
+    var showInSidebar = isMobilePlatform && window.innerWidth > 768;
+    document.getElementById('nav-browse').classList.toggle('hidden', !showInSidebar);
   }
+  updateBrowseNavVisibility();
+  window.addEventListener('resize', updateBrowseNavVisibility);
 
   // Mobile tab bar (Wallet / Browser)
   if (window.fistbump.mobile) {

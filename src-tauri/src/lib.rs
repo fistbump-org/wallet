@@ -453,7 +453,7 @@ fn browse(app: tauri::AppHandle, url: String, top: f64, left: f64, width: f64, h
     #[cfg(target_os = "android")]
     {
         let _ = (header_height, tab_bar_height);
-        browse_android::browse(&url, top as i32, height as i32, dark);
+        browse_android::browse(&url, top as i32, left as i32, width as i32, height as i32, dark);
         return Ok(());
     }
 
@@ -503,7 +503,7 @@ fn browse_error(top: f64, left: f64, width: f64, height: f64, dark: bool, badge:
     #[cfg(target_os = "android")]
     {
         let _ = (header_height, tab_bar_height);
-        browse_android::browse_error(top as i32, height as i32, dark, &badge, &title, &message);
+        browse_android::browse_error(top as i32, left as i32, width as i32, height as i32, dark, &badge, &title, &message);
     }
 }
 
@@ -1313,7 +1313,7 @@ mod browse_android {
         super::biometric_android::JAVA_VM.get()
     }
 
-    pub fn browse(url: &str, top: i32, height: i32, dark: bool) {
+    pub fn browse(url: &str, top: i32, left: i32, width: i32, height: i32, dark: bool) {
         let vm = match get_vm() { Some(v) => v, None => return };
         let mut env = match vm.attach_current_thread() { Ok(e) => e, Err(_) => return };
         let cls = match env.find_class("org/fistbump/wallet/BrowserBridge") {
@@ -1321,13 +1321,13 @@ mod browse_android {
         };
         let jurl = match env.new_string(url) { Ok(s) => s, Err(_) => return };
         let _ = env.call_static_method(
-            cls, "browse", "(Ljava/lang/String;IIZ)V",
-            &[JValue::Object(&jurl), JValue::Int(top),
-              JValue::Int(height), JValue::Bool(dark as u8)],
+            cls, "browse", "(Ljava/lang/String;IIIIZ)V",
+            &[JValue::Object(&jurl), JValue::Int(top), JValue::Int(left),
+              JValue::Int(width), JValue::Int(height), JValue::Bool(dark as u8)],
         );
     }
 
-    pub fn browse_error(top: i32, height: i32, dark: bool,
+    pub fn browse_error(top: i32, left: i32, width: i32, height: i32, dark: bool,
                         badge: &str, title: &str, message: &str) {
         let vm = match get_vm() { Some(v) => v, None => return };
         let mut env = match vm.attach_current_thread() { Ok(e) => e, Err(_) => return };
@@ -1339,8 +1339,8 @@ mod browse_android {
         let jm = match env.new_string(message) { Ok(s) => s, Err(_) => return };
         let _ = env.call_static_method(
             cls, "browseError",
-            "(IIZLjava/lang/String;Ljava/lang/String;Ljava/lang/String;)V",
-            &[JValue::Int(top), JValue::Int(height),
+            "(IIIIZLjava/lang/String;Ljava/lang/String;Ljava/lang/String;)V",
+            &[JValue::Int(top), JValue::Int(left), JValue::Int(width), JValue::Int(height),
               JValue::Bool(dark as u8), JValue::Object(&jb), JValue::Object(&jt), JValue::Object(&jm)],
         );
     }

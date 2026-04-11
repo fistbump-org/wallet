@@ -61,7 +61,7 @@ object BrowserBridge {
     }
 
     @JvmStatic
-    fun browse(url: String, top: Int, height: Int, dark: Boolean) {
+    fun browse(url: String, top: Int, left: Int, width: Int, height: Int, dark: Boolean) {
         val act = activity ?: return
         act.runOnUiThread {
             if (tauriWebView == null) {
@@ -70,7 +70,7 @@ object BrowserBridge {
             }
             val contentView = act.findViewById<FrameLayout>(android.R.id.content)
 
-            android.util.Log.d("FistbumpBrowser", "browse: top=$top height=$height reuse=${webView != null}")
+            android.util.Log.d("FistbumpBrowser", "browse: top=$top left=$left w=$width h=$height reuse=${webView != null}")
 
             val wv = webView ?: createWebView(act)
             wv.setBackgroundColor(if (dark) Color.parseColor("#09090b") else Color.parseColor("#f4f4f5"))
@@ -78,11 +78,9 @@ object BrowserBridge {
             wv.alpha = 0f
 
             (wv.parent as? ViewGroup)?.removeView(wv)
-            val params = FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                height
-            )
+            val params = FrameLayout.LayoutParams(width, height)
             params.topMargin = top
+            params.leftMargin = left
             contentView.addView(wv, params)
             webView = wv
 
@@ -153,7 +151,7 @@ object BrowserBridge {
     }
 
     @JvmStatic
-    fun browseError(top: Int, height: Int, dark: Boolean,
+    fun browseError(top: Int, left: Int, width: Int, height: Int, dark: Boolean,
                     badge: String, title: String, message: String) {
         val act = activity ?: return
         act.runOnUiThread {
@@ -174,11 +172,9 @@ object BrowserBridge {
             val wv = WebView(act)
             wv.setBackgroundColor(uiBg)
 
-            val params = FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                height
-            )
+            val params = FrameLayout.LayoutParams(width, height)
             params.topMargin = top
+            params.leftMargin = left
 
             contentView.addView(wv, params)
             webView = wv

@@ -1,5 +1,6 @@
 package org.fistbump.wallet
 
+import android.content.pm.ActivityInfo
 import android.graphics.Color
 import android.os.Bundle
 import android.util.Log
@@ -19,6 +20,15 @@ class MainActivity : TauriActivity() {
   private var docStartHandle: Any? = null
 
   override fun onCreate(savedInstanceState: Bundle?) {
+    // Phones lock to portrait; tablets (smallest width ≥ 600dp) lock to
+    // landscape — the sidebar layout only makes sense when wide, and
+    // fixing the orientation avoids re-layout headaches when the browser
+    // webview is overlaid on top of Tauri's content area.
+    requestedOrientation = if (resources.configuration.smallestScreenWidthDp < 600) {
+      ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+    } else {
+      ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+    }
     enableEdgeToEdge(
       statusBarStyle = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT),
       navigationBarStyle = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT)
