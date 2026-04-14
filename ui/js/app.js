@@ -4419,6 +4419,11 @@
   var miningToggling = false;
 
   async function handleMiningToggle(enabled) {
+    if (window.__APP_STORE__ === true) {
+      showToast('In accordance with App Store policies, mining is not available.');
+      updateMiningToggleUI(false);
+      return;
+    }
     if (miningToggling) {
       updateMiningToggleUI(!enabled);
       return;
@@ -4483,6 +4488,10 @@
   });
 
   minerSaveBtn.addEventListener('click', async function() {
+    if (window.__APP_STORE__ === true) {
+      showToast('In accordance with App Store policies, mining is not available.');
+      return;
+    }
     minerSaveBtn.style.opacity = '0.5';
     minerSaveBtn.style.pointerEvents = 'none';
     minerStatus.textContent = 'Saving...';

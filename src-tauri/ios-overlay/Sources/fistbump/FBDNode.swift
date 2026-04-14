@@ -86,6 +86,30 @@ private struct DirectLogHandler: LogHandler {
     }
 }
 
+// MARK: - Distribution detection
+
+/// True when this build was delivered via an Apple channel (App Store, TestFlight,
+/// or a reviewer's test install). Used to disable mining per App Store guideline
+/// 2.4.2(ii). Sideloaded .ipa files (Ad-hoc / Developer ID signed) read false here
+/// and retain full mining functionality.
+///
+/// Two independent signals are OR'd together so the check fails safe toward
+/// "App Store" if either is ambiguous:
+///   1. `embedded.mobileprovision` is stripped from App Store builds by Apple
+///      during delivery; sideloaded builds keep it.
+///   2. `appStoreReceiptURL` points to a real file for any Apple-distributed
+///      build (receipt for App Store, sandboxReceipt for TestFlight); sideloaded
+///      builds never have this file.
+private var isAppStoreBuild: Bool {
+    let noProvisioningProfile = Bundle.main.url(
+        forResource: "embedded", withExtension: "mobileprovision") == nil
+    let hasAppleReceipt: Bool = {
+        guard let url = Bundle.main.appStoreReceiptURL else { return false }
+        return FileManager.default.fileExists(atPath: url.path)
+    }()
+    return noProvisioningProfile || hasAppleReceipt
+}
+
 // MARK: - Entry point
 
 /// C-callable restart — invoked from Rust when mining settings change.
@@ -144,6 +168,18 @@ private func fixTauriWebViewLayout(attempt: Int = 0) {
         }
         webView.setNeedsLayout()
         webView.layoutIfNeeded()
+
+        // Expose the App Store flag to the frontend so it can gate the mining UI.
+        // evaluateJavaScript handles the already-loaded initial page; the
+        // WKUserScript covers any subsequent navigation/reload.
+        let flagJS = "window.__APP_STORE__ = \(isAppStoreBuild);"
+        webView.evaluateJavaScript(flagJS, completionHandler: nil)
+        let userScript = WKUserScript(
+            source: flagJS,
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: true
+        )
+        webView.configuration.userContentController.addUserScript(userScript)
     }
 }
 
@@ -175,10 +211,14 @@ class FBDNode {
         guard nodeTask == nil else { return }
 
         let dataDir = docs.appendingPathComponent("fbd").path
-        let minerAddr = loadMinerAddress()
+        // App Store builds never mine, regardless of what settings.json says
+        // (Apple guideline 2.4.2(ii) prohibits on-device cryptocurrency mining).
+        let minerAddr = isAppStoreBuild ? nil : loadMinerAddress()
 
         if let addr = minerAddr {
             fbLog("[fistbump] starting node, mining to \(addr)")
+        } else if isAppStoreBuild {
+            fbLog("[fistbump] starting node, mining unavailable in App Store builds")
         } else {
             fbLog("[fistbump] starting node, mining disabled")
         }
