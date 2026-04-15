@@ -1,6 +1,6 @@
 {
   "productName": "Fistbump",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "identifier": "org.fistbump.wallet",
   "build": {
     "frontendDist": "../ui",
@@ -16,7 +16,12 @@
         "minWidth": 600,
         "minHeight": 400,
         "decorations": false,
-        "backgroundColor": [9, 9, 11, 255]
+        "backgroundColor": [
+          9,
+          9,
+          11,
+          255
+        ]
       }
     ],
     "withGlobalTauri": true,
@@ -47,7 +52,9 @@
   "plugins": {
     "deep-link": {
       "desktop": {
-        "schemes": ["fistbump"]
+        "schemes": [
+          "fistbump"
+        ]
       }
     }
   }

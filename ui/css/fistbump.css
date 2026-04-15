@@ -374,6 +374,81 @@ tr:last-child td { border-bottom: none; }
 .green { color: var(--fb-green); }
 .red   { color: var(--fb-red); }
 
+/* Middle-truncating component for hashes and addresses
+ * Usage: <a class="trunc-mid"><span>prefix</span><span>suffix</span></a>
+ * The prefix span collapses when the parent runs out of room; the suffix
+ * span never shrinks, so the start AND the tail of the value stay
+ * readable. Stretches to fill its parent — give the parent a width or
+ * let it absorb table column slack.
+ *
+ * The prefix uses a mask-image fade on its right edge instead of the
+ * text-overflow keyword. text-overflow: ellipsis with U+2026 in IBM Plex
+ * Mono renders the dots in the left half of their character cell and
+ * leaves a half-cell of trailing void that looks like a gap. The fade
+ * is invisible when the content fits (the gradient sits past the text)
+ * and softens the truncation point when it doesn't. */
+.trunc-mid {
+  display: inline-flex;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  vertical-align: bottom;
+  gap: 0;
+}
+.trunc-mid > :first-child {
+  overflow: hidden;
+  white-space: nowrap;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+}
+.trunc-mid.is-truncated > :first-child {
+  -webkit-mask-image: linear-gradient(to right, #000 0, #000 calc(100% - 14px), transparent 100%);
+  mask-image: linear-gradient(to right, #000 0, #000 calc(100% - 14px), transparent 100%);
+}
+.trunc-mid > :last-child {
+  white-space: nowrap;
+  flex-shrink: 0;
+  margin: 0;
+  padding: 0;
+}
+
+/* Helper for cells that combine a fixed-width prefix (rank, badge, etc.)
+ * with a stretchy trunc-mid value. */
+.cell-stretch {
+  display: flex;
+  align-items: baseline;
+  gap: var(--fb-space-sm);
+  min-width: 0;
+}
+.cell-stretch > .trunc-mid {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Wrapper that keeps the FBC mark glued to its number across line breaks. */
+.fbc-amount { white-space: nowrap; }
+
+/* FBC currency mark — inline icon prefix used in front of every amount.
+ * Empty <span> styled with mask-image so it inherits text color via
+ * background-color: currentColor. SVG is embedded as a data URI so the
+ * same rule works in every project regardless of file layout. */
+.fbc-icon {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  vertical-align: -0.35em;
+  margin-left: 0.15em;
+  margin-right: 0.15em;
+  background-color: currentColor;
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20576%20330'%3E%3Cg%20transform='matrix(1,0,0,1,-212,-335)'%3E%3Cpath%20d='M362,664.616L391.107,575.58L589.761,575.58L597.951,550.384L717.331,550.384L680.011,664.616L362,664.616ZM668.125,335.384L788.125,335.384L721.215,540.384L601.216,540.384L668.125,335.384ZM460.556,565.384L535.625,335.384L655.625,335.384L580.573,565.384L460.556,565.384ZM328.056,565.384L403.125,335.384L523.125,335.384L448.057,565.384L328.056,565.384ZM270.625,335.384L390.625,335.384L331.876,515.384L211.875,515.384L270.625,335.384Z'/%3E%3C/g%3E%3C/svg%3E");
+  -webkit-mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  mask-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20576%20330'%3E%3Cg%20transform='matrix(1,0,0,1,-212,-335)'%3E%3Cpath%20d='M362,664.616L391.107,575.58L589.761,575.58L597.951,550.384L717.331,550.384L680.011,664.616L362,664.616ZM668.125,335.384L788.125,335.384L721.215,540.384L601.216,540.384L668.125,335.384ZM460.556,565.384L535.625,335.384L655.625,335.384L580.573,565.384L460.556,565.384ZM328.056,565.384L403.125,335.384L523.125,335.384L448.057,565.384L328.056,565.384ZM270.625,335.384L390.625,335.384L331.876,515.384L211.875,515.384L270.625,335.384Z'/%3E%3C/g%3E%3C/svg%3E");
+  mask-size: contain;
+  mask-repeat: no-repeat;
+}
+
 /* Terminal windows */
 .fb-terminal {
   background: var(--fb-bg-raised);
@@ -432,7 +507,39 @@ body::before {
  * <td>. Below 600px the header row is hidden and every data row reflows into
  * a labeled card: the first cell is the card heading, the rest become
  * label/value pairs stacked vertically. */
-.fb-table-responsive { width: 100%; }
+.fb-table-responsive {
+  width: 100%;
+  min-width: 0;
+  table-layout: auto;
+}
+
+/* Force the parent .card into a grid track with minmax(0, 1fr). Without
+ * this, an unbreakable cell (64-char hash, long agent string) widens the
+ * whole table past the card and the trunc-mid's max-width: 100% has
+ * nothing concrete to be 100% of. */
+.card:has(> .fb-table-responsive) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+}
+
+/* Desktop: every cell stays on a single line. Non-elastic cells size to
+ * their content. The cell that owns the elastic column (the one with a
+ * trunc-mid or cell-stretch inside) gets max-width: 0 so the standard
+ * auto-layout hack kicks in: other columns size to content, this one
+ * absorbs the leftover and clips its prefix with the trunc-mid's own
+ * ellipsis. */
+@media (min-width: 601px) {
+  .fb-table-responsive th,
+  .fb-table-responsive td {
+    white-space: nowrap;
+  }
+  .fb-table-responsive td:has(.trunc-mid),
+  .fb-table-responsive td:has(.cell-stretch) {
+    max-width: 0;
+    overflow: hidden;
+  }
+}
 
 @media (max-width: 600px) {
   .fb-table-responsive,

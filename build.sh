@@ -4,6 +4,9 @@ set -e
 DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$DIR"
 
+# Version — read from Tauri config so `bump.sh` only has to touch the canonical file
+VERSION=$(jq -r .version src-tauri/tauri.conf.json)
+
 # Signing identity
 APPLE_SIGNING_IDENTITY="Developer ID Application: Eskimo Software (5JAGPKCDD7)"
 
@@ -62,7 +65,7 @@ if [ -d "$APP" ] && [ -d "$ICON_SRC" ]; then
   codesign --force --sign "$APPLE_SIGNING_IDENTITY" --options runtime --timestamp "$APP"
 
   # Rebuild DMG with the patched app
-  DMG="src-tauri/target/universal-apple-darwin/release/bundle/dmg/Fistbump_0.1.0_universal.dmg"
+  DMG="src-tauri/target/universal-apple-darwin/release/bundle/dmg/Fistbump_${VERSION}_universal.dmg"
   echo "Rebuilding DMG..."
   mkdir -p "$(dirname "$DMG")"
   rm -f "$DMG"

@@ -223,9 +223,11 @@ class FBDNode {
             fbLog("[fistbump] starting node, mining disabled")
         }
 
+        let walletVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"
         let config = NodeConfig(
             network: .main,
             dataDir: dataDir,
+            agent: "fbw:\(walletVersion)(ios)",
             rpcHost: "127.0.0.1",
             rpcNoAuth: true,
             nsHost: "127.0.0.1",

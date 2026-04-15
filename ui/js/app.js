@@ -112,7 +112,7 @@
       if (fbdHash && fbdHash !== 'unknown') {
         var nodeEl = document.getElementById('about-node');
         if (nodeEl && nodeEl.textContent === '--') {
-          nodeEl.textContent = 'fbd 0.1.0 (' + fbdHash + ')';
+          nodeEl.textContent = 'fbd ' + v + ' (' + fbdHash + ')';
         }
       }
     });

@@ -728,10 +728,22 @@ fn start_node(app_handle: tauri::AppHandle) {
     let data_dir = fbd_data_dir();
     let _ = fs::create_dir_all(&data_dir);
 
+    let platform = if cfg!(target_os = "android") {
+        "android"
+    } else if cfg!(target_os = "macos") {
+        "mac"
+    } else if cfg!(target_os = "windows") {
+        "windows"
+    } else {
+        "linux"
+    };
+    let agent = format!("fbw:{}({})", env!("CARGO_PKG_VERSION"), platform);
+
     let mut cmd = Command::new(&binary);
     cmd.args(["--log-level", "debug", "--network", DEFAULT_NETWORK])
         .arg("--datadir")
         .arg(&data_dir)
+        .args(["--agent", &agent])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

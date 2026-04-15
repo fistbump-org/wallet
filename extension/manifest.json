@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Fistbump",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Connects web apps to the Fistbump desktop app via window.fistbump.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAoPjsfB5Q5m8mF3X8YS6EMQElVBsQKifY7YedHhWlflF3+jKIVufa8y++uIN98DIgeDQxQbX7tZWBjoQhKDo270Au4Fcq9Hp0iy/nOzmp7gIqo8RHMH6Ro7UuvqOuuV+63zFG29VyDaklOV+uvtjlgwpQkArU7DnLAu2Ia/2Gz5GEGK5/6jGKWGqsjdRerIkzHiFN6gx1E0DOWzvkUgsZBKfXqVnDDjX1Q0kSbyLS/pjQwPWqGEfMSCbqK/MJZMoAZxKGFz4lTnW09aDnQSFR1uMWDNoBwY6K9+pznRfKKxnYQEH6Fu5MyNvHVVQZGL5/bzGgryB0ouyi3RbPDC7ncwIDAQAB",
   "permissions": [
@@ -12,16 +12,24 @@
   },
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
-      "js": ["content-script.js"],
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content-script.js"
+      ],
       "run_at": "document_start",
       "all_frames": false
     }
   ],
   "web_accessible_resources": [
     {
-      "resources": ["injected.js"],
-      "matches": ["<all_urls>"]
+      "resources": [
+        "injected.js"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
     }
   ],
   "icons": {
