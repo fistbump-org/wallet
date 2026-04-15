@@ -122,6 +122,76 @@
       return unwrap(request('signMessage', payload));
     },
 
+    // Return the wallet's compressed secp256k1 pubkey used for atomic swaps.
+    // The pubkey is stable for a given wallet and can be handed to a
+    // counterparty so they can build an HTLC script that commits to it.
+    // Resolves with { pubkey: "<66 hex>", address: "fb1..." }.
+    // See swap/SPEC.md for the full protocol.
+    getPublicKey: function() {
+      return unwrap(request('getPublicKey'));
+    },
+
+    // Fund an HTLC (hash time-locked contract) by paying `amount` FBC into
+    // the P2WSH address derived from `witnessScriptHex`. The wallet verifies
+    // the script matches the canonical HTLC template (built via
+    // Script.htlc) before showing a "Fund Swap" review modal.
+    // Resolves with { txid, vout }.
+    fundHtlc: function(params) {
+      if (!params || typeof params !== 'object') {
+        return Promise.reject(new Error('fundHtlc: expected { witnessScriptHex, amount }'));
+      }
+      if (typeof params.witnessScriptHex !== 'string' || !params.witnessScriptHex) {
+        return Promise.reject(new Error('fundHtlc: missing `witnessScriptHex`'));
+      }
+      var amount = Number(params.amount);
+      if (!(amount > 0 && isFinite(amount))) {
+        return Promise.reject(new Error('fundHtlc: `amount` must be a positive number (FBC)'));
+      }
+      var payload = {
+        witnessScriptHex: params.witnessScriptHex,
+        amount: amount,
+      };
+      if (typeof params.memo === 'string') payload.memo = params.memo;
+      return unwrap(request('fundHtlc', payload));
+    },
+
+    // Spend an existing HTLC output via either the claim or refund branch.
+    // The wallet selects the correct signing key (claim_pubkey or
+    // refund_pubkey from the embedded script) and assembles the witness.
+    // For `claim`, supply `preimageHex` (64 hex chars of the preimage).
+    // For `refund`, the wallet sets nLockTime to the script's timelock.
+    // Resolves with { txid, rawTxHex }.
+    signHtlcSpend: function(params) {
+      if (!params || typeof params !== 'object') {
+        return Promise.reject(new Error('signHtlcSpend: missing params'));
+      }
+      var required = [
+        'fundingTxid', 'fundingVout', 'fundingAmount',
+        'witnessScriptHex', 'branch', 'destinationAddress', 'feeRate',
+      ];
+      for (var i = 0; i < required.length; i++) {
+        if (params[required[i]] === undefined || params[required[i]] === null) {
+          return Promise.reject(new Error('signHtlcSpend: missing `' + required[i] + '`'));
+        }
+      }
+      if (params.branch !== 'claim' && params.branch !== 'refund') {
+        return Promise.reject(new Error('signHtlcSpend: `branch` must be "claim" or "refund"'));
+      }
+      if (params.branch === 'claim' && typeof params.preimageHex !== 'string') {
+        return Promise.reject(new Error('signHtlcSpend: claim branch requires `preimageHex`'));
+      }
+      return unwrap(request('signHtlcSpend', {
+        fundingTxid: params.fundingTxid,
+        fundingVout: Number(params.fundingVout),
+        fundingAmount: Number(params.fundingAmount),
+        witnessScriptHex: params.witnessScriptHex,
+        branch: params.branch,
+        preimageHex: params.preimageHex || null,
+        destinationAddress: params.destinationAddress,
+        feeRate: Number(params.feeRate),
+      }));
+    },
+
     // Placeholder event API — implemented fully in a later pass once
     // we actually have events to emit (account change, disconnect, etc.).
     on: function(event, fn) {

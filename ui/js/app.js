@@ -672,6 +672,186 @@
         await resolveExt(p.id, null, (err && err.message) || String(err));
       }
     });
+
+    // ── getPublicKey ──
+    // Return the wallet's swap pubkey. No modal — the dApp already has the
+    // user's address via connect(), and the pubkey commits to the same key
+    // pair. This is purely a convenience so the dApp can build HTLC scripts
+    // that include the wallet's pubkey in the right slots.
+    ev.listen('ext://swap-pubkey-request', async function(e) {
+      var p = e && e.payload;
+      if (!p || !p.id || !p.origin) return;
+      try {
+        var res = await rpc('getswappubkey');
+        if (res.error) {
+          await resolveExt(p.id, null, friendlyError(res.error));
+          return;
+        }
+        await resolveExt(
+          p.id,
+          { pubkey: res.result.pubkey, address: res.result.address },
+          null
+        );
+      } catch (err) {
+        await resolveExt(p.id, null, (err && err.message) || String(err));
+      }
+    });
+
+    // ── fundHtlc ──
+    // Verify the script is a canonical HTLC (via parsehtlcscript), show a
+    // "Fund Swap" modal with amount + destination + hashlock + timelock,
+    // then build/sign/broadcast the funding tx.
+    ev.listen('ext://htlc-fund-request', async function(e) {
+      var p = e && e.payload;
+      if (!p || !p.id || !p.origin || !p.witnessScriptHex || typeof p.amount !== 'number') {
+        if (p && p.id) await resolveExt(p.id, null, 'invalid HTLC fund request');
+        return;
+      }
+      try {
+        var parseRes = await rpc('parsehtlcscript', [p.witnessScriptHex]);
+        if (parseRes.error || !parseRes.result) {
+          await resolveExt(
+            p.id,
+            null,
+            'witness script is not a valid HTLC — refusing to fund'
+          );
+          return;
+        }
+        var parsed = parseRes.result;
+        var amountDoo = Math.round(p.amount * 1000000);
+
+        var rows = [
+          { label: 'Amount', fbcBumps: amountDoo, variant: 'primary' },
+          { label: 'HTLC address', value: parsed.p2wsh_address, mono: true },
+          { label: 'Hashlock', value: parsed.hashlock.slice(0, 16) + '...', mono: true },
+          { label: 'Refund after block', value: Number(parsed.locktime).toLocaleString() },
+        ];
+
+        var ok = await showReview({
+          origin: p.origin,
+          title: 'Fund Swap',
+          subtitle: 'This site is funding a cross-chain atomic swap. Your FBC will be '
+            + 'locked until the counterparty claims it (revealing the preimage) or the '
+            + 'timelock expires and you can refund.',
+          rows: rows,
+          confirmText: 'Fund Swap',
+        });
+        if (!ok) {
+          await resolveExt(p.id, null, 'user denied');
+          return;
+        }
+        if (!await requireUnlock()) {
+          await resolveExt(p.id, null, 'unlock cancelled');
+          return;
+        }
+
+        var fundRes = await rpc('createhtlcfund', [p.witnessScriptHex, p.amount]);
+        if (fundRes.error) {
+          await resolveExt(p.id, null, friendlyError(fundRes.error));
+          return;
+        }
+        var pstx = fundRes.result.pstx;
+        var signRes = await rpc('signtx', [pstx]);
+        if (signRes.error) {
+          await resolveExt(p.id, null, friendlyError(signRes.error));
+          return;
+        }
+        var broadRes = await rpc('broadcasttx', [signRes.result.pstx]);
+        if (broadRes.error) {
+          await resolveExt(p.id, null, friendlyError(broadRes.error));
+          return;
+        }
+
+        // The HTLC output is always vout 0 of the funding tx because
+        // buildUnsignedHTLCFund emits the HTLC output first (change is
+        // appended only when non-dust).
+        await resolveExt(p.id, { txid: broadRes.result.txid, vout: 0 }, null);
+      } catch (err) {
+        await resolveExt(p.id, null, (err && err.message) || String(err));
+      }
+    });
+
+    // ── signHtlcSpend ──
+    // Sign a claim or refund spend of an HTLC output. Branch-specific
+    // review modal. The wallet returns the signed raw tx hex and txid.
+    // Note: this does NOT broadcast — the dApp decides when to broadcast
+    // (claim should broadcast immediately; refund must wait for the
+    // timelock height).
+    ev.listen('ext://htlc-spend-request', async function(e) {
+      var p = e && e.payload;
+      if (!p || !p.id || !p.origin || !p.fundingTxid || !p.witnessScriptHex || !p.branch
+          || !p.destinationAddress) {
+        if (p && p.id) await resolveExt(p.id, null, 'invalid HTLC spend request');
+        return;
+      }
+      try {
+        var parseRes = await rpc('parsehtlcscript', [p.witnessScriptHex]);
+        if (parseRes.error || !parseRes.result) {
+          await resolveExt(p.id, null, 'witness script is not a valid HTLC');
+          return;
+        }
+        var parsed = parseRes.result;
+
+        var isClaim = p.branch === 'claim';
+        var rows = [
+          { label: 'Receive', fbcBumps: p.fundingAmount, variant: 'primary' },
+          { label: 'To', value: p.destinationAddress, mono: true },
+          { label: 'From HTLC', value: parsed.p2wsh_address, mono: true },
+        ];
+        if (isClaim && p.preimageHex) {
+          rows.push({ label: 'Preimage', value: p.preimageHex.slice(0, 16) + '...', mono: true });
+        }
+        if (!isClaim) {
+          rows.push({ label: 'Refund valid after block', value: Number(parsed.locktime).toLocaleString() });
+        }
+
+        var ok = await showReview({
+          origin: p.origin,
+          title: isClaim ? 'Claim Swap' : 'Refund Swap',
+          subtitle: isClaim
+            ? 'This site is claiming the counterparty\u2019s locked FBC by revealing '
+              + 'the preimage. After broadcast, the counterparty will be able to see '
+              + 'this preimage on-chain and use it to claim their side of the swap.'
+            : 'This site is refunding an expired swap. Refund is only valid once the '
+              + 'timelock has passed on-chain — if the block height above is in the future, '
+              + 'the transaction will be rejected by the network until then.',
+          rows: rows,
+          confirmText: isClaim ? 'Claim' : 'Refund',
+        });
+        if (!ok) {
+          await resolveExt(p.id, null, 'user denied');
+          return;
+        }
+        if (!await requireUnlock()) {
+          await resolveExt(p.id, null, 'unlock cancelled');
+          return;
+        }
+
+        var rpcArgs = [
+          p.fundingTxid,
+          p.fundingVout,
+          p.fundingAmount,
+          p.witnessScriptHex,
+          p.branch,
+          p.destinationAddress,
+          p.feeRate,
+        ];
+        if (isClaim) rpcArgs.push(p.preimageHex);
+
+        var signRes = await rpc('signhtlcspend', rpcArgs);
+        if (signRes.error) {
+          await resolveExt(p.id, null, friendlyError(signRes.error));
+          return;
+        }
+        await resolveExt(
+          p.id,
+          { rawTxHex: signRes.result.tx_hex, txid: signRes.result.txid },
+          null
+        );
+      } catch (err) {
+        await resolveExt(p.id, null, (err && err.message) || String(err));
+      }
+    });
   })();
 
   const NETWORKS = {

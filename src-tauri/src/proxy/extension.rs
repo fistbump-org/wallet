@@ -1083,6 +1083,9 @@ fn process_ipc_message(bytes: &[u8], app: &AppHandle) -> serde_json::Value {
         "connect" => process_connect_request(app, origin),
         "sendTx" => process_sendtx_request(app, origin, &msg),
         "signMessage" => process_sign_message_request(app, origin, &msg),
+        "getPublicKey" => process_get_pubkey_request(app, origin),
+        "fundHtlc" => process_fund_htlc_request(app, origin, &msg),
+        "signHtlcSpend" => process_sign_htlc_spend_request(app, origin, &msg),
         other => serde_json::json!({ "error": format!("unknown request type: {}", other) }),
     }
 }
@@ -1344,5 +1347,188 @@ fn process_sign_message_request(
     }
 
     dispatch_frontend_request(app, origin, "signMessage", "ext://sign-request", extra)
+}
+
+/// Handler for `{"type": "getPublicKey", "origin": "..."}`.
+///
+/// Returns the wallet's secp256k1 compressed pubkey used for atomic swaps.
+/// The frontend calls fbd's `getswappubkey` RPC and returns the result —
+/// no modal, because exposing a pubkey is not a privacy change beyond what
+/// a prior `connect()` already granted (the origin already knows an address
+/// that commits to the same key). A future hardening could add a first-use
+/// confirmation per origin; left out of v1 for UX parity with `connect`.
+fn process_get_pubkey_request(app: &AppHandle, origin: &str) -> serde_json::Value {
+    if origin.is_empty() {
+        return serde_json::json!({ "error": "missing origin" });
+    }
+    dispatch_frontend_request(
+        app,
+        origin,
+        "getPublicKey",
+        "ext://swap-pubkey-request",
+        serde_json::Map::new(),
+    )
+}
+
+/// Handler for
+/// `{"type": "fundHtlc", "origin": "...", "witnessScriptHex": "...", "amount": 1.5, "memo": "..."}`.
+///
+/// Shape-checks the payload and forwards to the wallet frontend, which
+/// verifies the script matches `Script.htlc(...)` before showing a
+/// "Fund Swap" review modal with the deposit amount, HTLC address, and fee.
+fn process_fund_htlc_request(
+    app: &AppHandle,
+    origin: &str,
+    msg: &serde_json::Value,
+) -> serde_json::Value {
+    if origin.is_empty() {
+        return serde_json::json!({ "error": "missing origin" });
+    }
+
+    let Some(script_hex) = msg.get("witnessScriptHex").and_then(|v| v.as_str()) else {
+        return serde_json::json!({ "error": "missing `witnessScriptHex` field" });
+    };
+    if script_hex.is_empty() || !is_hex_string(script_hex) {
+        return serde_json::json!({ "error": "`witnessScriptHex` must be a hex string" });
+    }
+    // Upper bound matches fbd's consensus script size cap (10_000 bytes =
+    // 20_000 hex chars). We're stricter than necessary — a well-formed HTLC
+    // is about 103 bytes — but allow some headroom for future templates.
+    if script_hex.len() > 2 * 10_000 {
+        return serde_json::json!({ "error": "`witnessScriptHex` is too large" });
+    }
+
+    let amount = match msg.get("amount") {
+        Some(v) if v.is_number() => v.as_f64().unwrap_or(0.0),
+        _ => return serde_json::json!({ "error": "`amount` must be a positive number (FBC)" }),
+    };
+    if !(amount > 0.0 && amount.is_finite()) {
+        return serde_json::json!({ "error": "`amount` must be a positive number (FBC)" });
+    }
+
+    let memo = msg
+        .get("memo")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+
+    let mut extra = serde_json::Map::new();
+    extra.insert("witnessScriptHex".into(), serde_json::json!(script_hex));
+    extra.insert("amount".into(), serde_json::json!(amount));
+    if let Some(m) = memo {
+        extra.insert("memo".into(), serde_json::json!(m));
+    }
+
+    dispatch_frontend_request(app, origin, "fundHtlc", "ext://htlc-fund-request", extra)
+}
+
+/// Handler for
+/// `{"type": "signHtlcSpend", "origin": "...", ...}`. See `injected.js` for
+/// the full parameter list. The wallet frontend shows a branch-specific
+/// review modal ("Claim swap" vs "Refund swap") before signing.
+fn process_sign_htlc_spend_request(
+    app: &AppHandle,
+    origin: &str,
+    msg: &serde_json::Value,
+) -> serde_json::Value {
+    if origin.is_empty() {
+        return serde_json::json!({ "error": "missing origin" });
+    }
+
+    let Some(txid) = msg.get("fundingTxid").and_then(|v| v.as_str()) else {
+        return serde_json::json!({ "error": "missing `fundingTxid`" });
+    };
+    if txid.len() != 64 || !is_hex_string(txid) {
+        return serde_json::json!({ "error": "`fundingTxid` must be 64 hex chars" });
+    }
+
+    let Some(vout_f) = msg.get("fundingVout").and_then(|v| v.as_f64()) else {
+        return serde_json::json!({ "error": "`fundingVout` must be a non-negative integer" });
+    };
+    if vout_f < 0.0 || vout_f > u32::MAX as f64 || vout_f.fract() != 0.0 {
+        return serde_json::json!({ "error": "`fundingVout` must be a non-negative integer" });
+    }
+
+    let Some(amount_f) = msg.get("fundingAmount").and_then(|v| v.as_f64()) else {
+        return serde_json::json!({ "error": "`fundingAmount` must be a positive number (bumps)" });
+    };
+    if amount_f <= 0.0 || amount_f.fract() != 0.0 {
+        return serde_json::json!({ "error": "`fundingAmount` must be a positive integer" });
+    }
+
+    let Some(script_hex) = msg.get("witnessScriptHex").and_then(|v| v.as_str()) else {
+        return serde_json::json!({ "error": "missing `witnessScriptHex`" });
+    };
+    if script_hex.is_empty() || !is_hex_string(script_hex) {
+        return serde_json::json!({ "error": "`witnessScriptHex` must be a hex string" });
+    }
+
+    let Some(branch) = msg.get("branch").and_then(|v| v.as_str()) else {
+        return serde_json::json!({ "error": "missing `branch`" });
+    };
+    if branch != "claim" && branch != "refund" {
+        return serde_json::json!({ "error": "`branch` must be \"claim\" or \"refund\"" });
+    }
+
+    let preimage = msg
+        .get("preimageHex")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+
+    if branch == "claim" {
+        match preimage.as_deref() {
+            Some(p) if p.len() == 64 && is_hex_string(p) => {}
+            _ => {
+                return serde_json::json!({
+                    "error": "claim branch requires `preimageHex` (64 hex chars)"
+                });
+            }
+        }
+    }
+
+    let Some(dest) = msg.get("destinationAddress").and_then(|v| v.as_str()) else {
+        return serde_json::json!({ "error": "missing `destinationAddress`" });
+    };
+    if dest.is_empty() {
+        return serde_json::json!({ "error": "`destinationAddress` is empty" });
+    }
+
+    let Some(fee_f) = msg.get("feeRate").and_then(|v| v.as_f64()) else {
+        return serde_json::json!({ "error": "`feeRate` must be a positive integer" });
+    };
+    if fee_f <= 0.0 || fee_f.fract() != 0.0 {
+        return serde_json::json!({ "error": "`feeRate` must be a positive integer" });
+    }
+
+    let mut extra = serde_json::Map::new();
+    extra.insert("fundingTxid".into(), serde_json::json!(txid));
+    extra.insert("fundingVout".into(), serde_json::json!(vout_f as u64));
+    extra.insert("fundingAmount".into(), serde_json::json!(amount_f as u64));
+    extra.insert("witnessScriptHex".into(), serde_json::json!(script_hex));
+    extra.insert("branch".into(), serde_json::json!(branch));
+    if let Some(p) = preimage {
+        extra.insert("preimageHex".into(), serde_json::json!(p));
+    }
+    extra.insert("destinationAddress".into(), serde_json::json!(dest));
+    extra.insert("feeRate".into(), serde_json::json!(fee_f as u64));
+
+    dispatch_frontend_request(
+        app,
+        origin,
+        "signHtlcSpend",
+        "ext://htlc-spend-request",
+        extra,
+    )
+}
+
+/// Cheap ASCII hex validator for the extension proxy's shape checks. Full
+/// decoding happens downstream in fbd — we just reject obvious garbage here
+/// so a hostile dApp can't flood a review modal with non-hex nonsense.
+fn is_hex_string(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() % 2 == 0
+        && s.bytes()
+            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f' | b'A'..=b'F'))
 }
 

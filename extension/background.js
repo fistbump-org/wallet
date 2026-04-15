@@ -59,6 +59,34 @@ async function handle(msg, sender) {
     if (p.name) sigReq.name = p.name;
     return await sendNative(sigReq);
   }
+  if (msg.type === 'getPublicKey') {
+    return await sendNative({ type: 'getPublicKey', origin: origin || '' });
+  }
+  if (msg.type === 'fundHtlc') {
+    var fp = msg.payload || {};
+    return await sendNative({
+      type: 'fundHtlc',
+      origin: origin || '',
+      witnessScriptHex: fp.witnessScriptHex,
+      amount: fp.amount,
+      memo: fp.memo || '',
+    });
+  }
+  if (msg.type === 'signHtlcSpend') {
+    var sp = msg.payload || {};
+    return await sendNative({
+      type: 'signHtlcSpend',
+      origin: origin || '',
+      fundingTxid: sp.fundingTxid,
+      fundingVout: sp.fundingVout,
+      fundingAmount: sp.fundingAmount,
+      witnessScriptHex: sp.witnessScriptHex,
+      branch: sp.branch,
+      preimageHex: sp.preimageHex || '',
+      destinationAddress: sp.destinationAddress,
+      feeRate: sp.feeRate,
+    });
+  }
   throw new Error('unknown request type: ' + msg.type);
 }
 
