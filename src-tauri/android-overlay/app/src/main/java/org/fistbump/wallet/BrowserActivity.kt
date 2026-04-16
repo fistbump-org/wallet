@@ -5,6 +5,7 @@ import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.RippleDrawable
+import android.net.http.SslCertificate
 import android.net.http.SslError
 import android.os.Bundle
 import android.text.InputType
@@ -34,6 +35,9 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.webkit.ProxyConfig
 import androidx.webkit.ProxyController
 import androidx.webkit.WebViewFeature
+import java.io.File
+import java.security.cert.CertificateFactory
+import java.security.cert.X509Certificate
 
 /**
  * Full-screen browser launched as a modal Activity. Routes all traffic
@@ -54,6 +58,7 @@ class BrowserActivity : AppCompatActivity() {
     private lateinit var backButton: ImageButton
     private lateinit var reloadButton: ImageButton
     private var dark: Boolean = true
+    private var localCaCert: X509Certificate? = null
 
     // Wallet palette — matches ui/css/style.css dark theme
     private val bgColor get() = if (dark) 0xFF09090B.toInt() else 0xFFF4F4F5.toInt()
@@ -275,8 +280,13 @@ class BrowserActivity : AppCompatActivity() {
 
             override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
                 // Proxy has already DANE-validated upstream certs and is presenting
-                // our local CA-minted cert — always accept.
-                handler?.proceed()
+                // our local CA-minted cert. Only accept errors for certs actually
+                // signed by our local CA — never blanket-proceed.
+                if (error != null && isSignedByLocalCA(error.certificate)) {
+                    handler?.proceed()
+                } else {
+                    handler?.cancel()
+                }
             }
 
             override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
@@ -311,6 +321,36 @@ class BrowserActivity : AppCompatActivity() {
         webView.loadUrl(url)
     }
 
+    private fun loadLocalCA(): X509Certificate? {
+        localCaCert?.let { return it }
+        val caFile = File(filesDir, ".fistbump/proxy-ca.crt")
+        if (!caFile.exists()) return null
+        return try {
+            val factory = CertificateFactory.getInstance("X.509")
+            val cert = caFile.inputStream().use {
+                factory.generateCertificate(it) as X509Certificate
+            }
+            localCaCert = cert
+            cert
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun isSignedByLocalCA(serverCert: SslCertificate?): Boolean {
+        if (serverCert == null) return false
+        val ca = loadLocalCA() ?: return false
+        val bundle = SslCertificate.saveState(serverCert) ?: return false
+        val x509 = bundle.getSerializable("x509-certificate") as? X509Certificate ?: return false
+        return try {
+            x509.verify(ca.publicKey)
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     private fun showError(host: String, code: Int) {
         val (badge, title, message) = when (code) {
             WebViewClient.ERROR_TIMEOUT ->
@@ -322,6 +362,9 @@ class BrowserActivity : AppCompatActivity() {
             WebViewClient.ERROR_CONNECT ->
                 Triple("CONNECTION FAILED", "Cannot Connect",
                     "Could not connect to the server for <strong>$host</strong>.")
+            WebViewClient.ERROR_FAILED_SSL_HANDSHAKE ->
+                Triple("CERTIFICATE ERROR", "Connection Not Secure",
+                    "The SSL certificate for <strong>$host</strong> is not valid. The connection has been blocked.")
             else ->
                 Triple("DANE VALIDATION FAILED", "Connection Not Secure",
                     "The certificate presented by <strong>$host</strong> does not match its on-chain TLSA record. The connection has been blocked.")
