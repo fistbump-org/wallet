@@ -773,10 +773,9 @@
 
     // ── signHtlcSpend ──
     // Sign a claim or refund spend of an HTLC output. Branch-specific
-    // review modal. The wallet returns the signed raw tx hex and txid.
-    // Note: this does NOT broadcast — the dApp decides when to broadcast
-    // (claim should broadcast immediately; refund must wait for the
-    // timelock height).
+    // review modal. The wallet signs AND broadcasts the tx, returning
+    // { rawTxHex, txid } on success or { rawTxHex, txid, broadcastError }
+    // if signing succeeded but broadcast failed (so the dApp can retry).
     ev.listen('ext://htlc-spend-request', async function(e) {
       var p = e && e.payload;
       if (!p || !p.id || !p.origin || !p.fundingTxid || !p.witnessScriptHex || !p.branch
@@ -849,7 +848,14 @@
         // mempool — a silent loss-of-funds risk if the counterparty refunds.
         var pushRes = await rpc('sendrawtransaction', [signRes.result.tx_hex]);
         if (pushRes.error) {
-          await resolveExt(p.id, null, friendlyError(pushRes.error));
+          // Return the signed tx even on broadcast failure so the dApp can
+          // retry or surface the raw hex for manual broadcast. Losing the
+          // signed tx on a transient mempool error was a fund-loss risk.
+          await resolveExt(p.id, {
+            rawTxHex: signRes.result.tx_hex,
+            txid: signRes.result.txid,
+            broadcastError: friendlyError(pushRes.error),
+          }, null);
           return;
         }
         await resolveExt(
