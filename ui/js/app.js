@@ -1191,6 +1191,7 @@
     if (!msg) return 'Something went wrong.';
     var s = typeof msg === 'string' ? msg : msg.toString();
     if (s.includes('Connection refused') || s.includes('connect ECONNREFUSED')) return 'Cannot connect to the node. Is it running?';
+    if (s.includes('error sending request')) return 'Could not reach the node. Please try again.';
     if (s.includes('timeout') || s.includes('timed out')) return 'Request timed out. The node may be busy.';
     if (s.includes('wallet is locked')) return 'Wallet is locked. Unlock it first.';
     if (s.includes('wallet not initialized')) return 'No wallet loaded.';

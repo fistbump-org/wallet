@@ -302,38 +302,56 @@ async fn rpc_call(
 
     let client = reqwest::Client::new();
     let url = format!("http://{}:{}/", host, port);
-    let mut builder = client
-        .post(&url)
-        .header("Content-Type", "application/json")
-        .json(&payload)
-        .timeout(std::time::Duration::from_secs(120));
+    let api_key = get_api_key(&settings);
 
-    if let Some(key) = get_api_key(&settings) {
-        builder = builder.basic_auth("x", Some(key));
-    }
+    // Retry on transport failures (connection refused, timeout). The
+    // in-process node on iOS can be briefly unreachable while it's
+    // initializing, restarting on foreground, or rebinding listeners —
+    // a short retry lets the next call succeed instead of surfacing a
+    // raw reqwest error to the user.
+    let mut last_error = String::new();
+    for attempt in 0..3u32 {
+        if attempt > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
+        let mut builder = client
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .json(&payload)
+            .timeout(std::time::Duration::from_secs(120));
 
-    match builder.send().await {
-        Ok(res) => match res.json::<Value>().await {
-            Ok(json_val) => {
-                if let Some(err) = json_val.get("error") {
-                    if !err.is_null() {
-                        let msg = err
-                            .get("message")
-                            .and_then(|m| m.as_str())
-                            .unwrap_or("RPC error");
-                        let code = err
-                            .get("code")
-                            .and_then(|c| c.as_i64())
-                            .unwrap_or(-1);
-                        return Ok(json!({ "error": msg, "errorCode": code }));
+        if let Some(ref key) = api_key {
+            builder = builder.basic_auth("x", Some(key));
+        }
+
+        match builder.send().await {
+            Ok(res) => {
+                return match res.json::<Value>().await {
+                    Ok(json_val) => {
+                        if let Some(err) = json_val.get("error") {
+                            if !err.is_null() {
+                                let msg = err
+                                    .get("message")
+                                    .and_then(|m| m.as_str())
+                                    .unwrap_or("RPC error");
+                                let code = err
+                                    .get("code")
+                                    .and_then(|c| c.as_i64())
+                                    .unwrap_or(-1);
+                                return Ok(json!({ "error": msg, "errorCode": code }));
+                            }
+                        }
+                        Ok(json!({ "result": json_val.get("result").cloned().unwrap_or(Value::Null) }))
                     }
-                }
-                Ok(json!({ "result": json_val.get("result").cloned().unwrap_or(Value::Null) }))
+                    Err(_) => Ok(json!({ "error": "Invalid JSON response" })),
+                };
             }
-            Err(_) => Ok(json!({ "error": "Invalid JSON response" })),
-        },
-        Err(e) => Ok(json!({ "error": e.to_string() })),
+            Err(e) => {
+                last_error = e.to_string();
+            }
+        }
     }
+    Ok(json!({ "error": last_error }))
 }
 
 // ── Log ──

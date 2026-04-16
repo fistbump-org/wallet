@@ -30,7 +30,7 @@ url = "2"
 dirs = "5"
 open = "5"
 interprocess = "2"
-tokio = { version = "1", features = ["rt", "net", "io-util", "macros", "sync"] }
+tokio = { version = "1", features = ["rt", "net", "io-util", "macros", "sync", "time"] }
 rcgen = { version = "0.13", features = ["x509-parser"] }
 tokio-rustls = "0.26"
 rustls = { version = "0.23", features = ["ring"] }
