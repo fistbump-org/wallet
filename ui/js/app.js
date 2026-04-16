@@ -843,6 +843,15 @@
           await resolveExt(p.id, null, friendlyError(signRes.error));
           return;
         }
+        // signhtlcspend only signs — broadcast here so dApps don't have to
+        // chain a second RPC. Earlier behavior left the signed tx in the
+        // dApp's memory, reporting "Claim broadcast" while nothing hit the
+        // mempool — a silent loss-of-funds risk if the counterparty refunds.
+        var pushRes = await rpc('sendrawtransaction', [signRes.result.tx_hex]);
+        if (pushRes.error) {
+          await resolveExt(p.id, null, friendlyError(pushRes.error));
+          return;
+        }
         await resolveExt(
           p.id,
           { rawTxHex: signRes.result.tx_hex, txid: signRes.result.txid },
