@@ -551,7 +551,7 @@
           return;
         }
 
-        var signRes = await rpc('signtx', [pstx]);
+        var signRes = await signPstx(pstx);
         if (signRes.error) {
           await resolveExt(p.id, null, friendlyError(signRes.error));
           return;
@@ -751,7 +751,7 @@
           return;
         }
         var pstx = fundRes.result.pstx;
-        var signRes = await rpc('signtx', [pstx]);
+        var signRes = await signPstx(pstx);
         if (signRes.error) {
           await resolveExt(p.id, null, friendlyError(signRes.error));
           return;
