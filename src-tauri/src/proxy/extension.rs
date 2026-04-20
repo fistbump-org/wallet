@@ -577,6 +577,30 @@ const FIREFOX_EXTENSION_ID: &str = "extension@fistbump.org";
 /// call uses this exact string; the JSON file we write must match.
 const NM_HOST_NAME: &str = "org.fistbump.wallet";
 
+/// Strip Rust's `\\?\` verbatim path prefix on Windows.
+///
+/// `resource_dir()` can return paths with the extended-length `\\?\` prefix
+/// (either because Tauri canonicalizes internally or the OS hands it back
+/// that way). Chrome's native messaging host launcher rejects such paths:
+/// the extension gets "Error when communicating with the native messaging
+/// host" and the bridge never spawns. Normalize to a plain drive-letter
+/// path before serializing into the manifest JSON.
+#[cfg(target_os = "windows")]
+fn strip_verbatim_prefix(p: &std::path::Path) -> std::path::PathBuf {
+    let s = p.as_os_str().to_string_lossy();
+    // \\?\UNC\server\share\... -> \\server\share\...
+    if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        let mut out = String::from(r"\\");
+        out.push_str(rest);
+        return std::path::PathBuf::from(out);
+    }
+    // \\?\C:\... -> C:\...
+    if let Some(rest) = s.strip_prefix(r"\\?\") {
+        return std::path::PathBuf::from(rest);
+    }
+    p.to_path_buf()
+}
+
 /// On desktop, register this wallet's `fistbump-bridge` binary as the
 /// native messaging host for the browser extension in every supported
 /// browser (Chromium-family and Firefox).
@@ -607,7 +631,7 @@ pub fn install_native_messaging_host(app: &AppHandle) {
         return;
     };
     #[cfg(target_os = "windows")]
-    let bridge = resource_dir.join("fistbump-bridge.exe");
+    let bridge = strip_verbatim_prefix(&resource_dir.join("fistbump-bridge.exe"));
     #[cfg(not(target_os = "windows"))]
     let bridge = resource_dir.join("fistbump-bridge");
 
