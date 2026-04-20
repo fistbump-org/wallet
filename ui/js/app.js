@@ -881,6 +881,7 @@
   let walletEncrypted = false;
   let walletUnlocked = true;
   let walletIsMultisig = false;
+  let walletIsWatchOnly = false;
   let walletMultisigM = 0;
   let walletMultisigN = 0;
   let biometricSupported = false;
@@ -976,6 +977,32 @@
       });
     }
     return res;
+  }
+
+  // Sign a PSTX, routing through the Ledger when the active wallet is
+  // watch-only (xpub-only). Mimics the rpc('signtx', [pstx]) response shape so
+  // callers can keep their existing { result: { pstx, signatures } } handling.
+  async function signPstx(pstxHex) {
+    if (!walletIsWatchOnly) {
+      return rpc('signtx', [pstxHex]);
+    }
+    try {
+      const addrRes = await rpc('listaddresses');
+      if (addrRes.error) return { error: addrRes.error };
+      const map = {};
+      const addrList = addrRes.result || [];
+      for (const a of addrList) {
+        if (a && a.address && a.path) map[a.address] = a.path;
+      }
+      const signed = await __invoke('ledger_sign_pstx', {
+        pstxHex: pstxHex,
+        network: 'main',
+        addressToPath: map
+      });
+      return { result: { pstx: signed, signatures: 1 } };
+    } catch (e) {
+      return { error: 'Ledger: ' + ((e && e.message) || String(e)) };
+    }
   }
 
   // Prompt user to unlock if wallet is encrypted and locked.
@@ -1313,6 +1340,7 @@
       var winfo = await rpc('getwalletinfo');
       if (winfo.result) {
         walletIsMultisig = winfo.result.type === 'multisig';
+        walletIsWatchOnly = winfo.result.type === 'watchOnly';
         walletMultisigM = winfo.result.m || 0;
         walletMultisigN = winfo.result.n || 0;
       }
@@ -1334,6 +1362,7 @@
     try { __invoke('set_active_wallet', { name: null }); } catch(_) {}
     currentAddress = null;
     walletIsMultisig = false;
+    walletIsWatchOnly = false;
     walletMultisigM = 0;
     walletMultisigN = 0;
     var cosignBtn = document.getElementById('btn-show-cosign');
@@ -1371,11 +1400,13 @@
     refreshLog();
   });
 
-  // Create / Import wallet
+  // Create / Import / Ledger wallet
   let isImporting = false;
+  let isLedger = false;
 
   document.getElementById('btn-create-wallet').addEventListener('click', async () => {
     isImporting = false;
+    isLedger = false;
     document.getElementById('new-wallet-name').value = '';
     document.getElementById('import-field').classList.add('hidden');
     document.getElementById('btn-login-submit').textContent = 'Create';
@@ -1383,8 +1414,20 @@
     await showLoginPage('login-page-create');
   });
 
+  document.getElementById('btn-connect-ledger').addEventListener('click', async () => {
+    isImporting = false;
+    isLedger = true;
+    document.getElementById('new-wallet-name').value = '';
+    document.getElementById('import-field').classList.add('hidden');
+    document.getElementById('btn-login-submit').textContent = 'Connect Ledger';
+    document.getElementById('login-form-status').textContent =
+      'Plug in your Ledger, unlock it, and open the Fistbump app — then click Connect Ledger.';
+    await showLoginPage('login-page-create');
+  });
+
   document.getElementById('btn-import-wallet').addEventListener('click', async () => {
     isImporting = true;
+    isLedger = false;
     document.getElementById('new-wallet-name').value = '';
     const grid = document.getElementById('import-grid');
     grid.innerHTML = Array.from({length: 24}, (_, i) =>
@@ -1598,6 +1641,8 @@
 
   document.getElementById('btn-login-back').addEventListener('click', async () => {
     document.getElementById('new-wallet-name').value = '';
+    isImporting = false;
+    isLedger = false;
     await showLoginPage('login-page-main', initLogin);
   });
 
@@ -1617,6 +1662,34 @@
         return;
       }
       params.push(phrase);
+    } else if (isLedger) {
+      el.innerHTML = '<div class="modal-loading">Talking to Ledger… approve on device if prompted.</div>';
+      let xpub;
+      try {
+        xpub = await __invoke('ledger_get_account_xpub', { account: 0 });
+      } catch (e) {
+        el.innerHTML = '<div class="error-msg">Ledger error: ' + esc(String(e)) + '</div>';
+        return;
+      }
+      // Refuse to add the same Ledger account twice — it'd just create a second
+      // wallet watching the same addresses with no actual difference.
+      try {
+        const wlist = await rpc('listwallets', [], { wallet: null });
+        const names = (wlist && wlist.result) || [];
+        const infos = await Promise.all(
+          names.map(n => rpc('getwalletinfo', [], { wallet: n }).catch(() => null))
+        );
+        for (let i = 0; i < infos.length; i++) {
+          const info = infos[i];
+          if (info && info.result && info.result.xpub === xpub) {
+            el.innerHTML =
+              '<div class="error-msg">This Ledger account is already connected as wallet "'
+              + esc(names[i]) + '".</div>';
+            return;
+          }
+        }
+      } catch (_) { /* if the duplicate check fails, fall through and let createwallet error if it must */ }
+      params.push(xpub);
     }
     el.innerHTML = '<div class="modal-loading">Creating wallet...</div>';
     try {
@@ -1624,7 +1697,7 @@
       if (res.error) throw new Error(res.error);
       const result = res.result;
 
-      if (result.mnemonic && !isImporting) {
+      if (result.mnemonic && !isImporting && !isLedger) {
         const words = result.mnemonic.split(' ');
         document.getElementById('mnemonic-raw').value = result.mnemonic;
         document.getElementById('mnemonic-words').innerHTML = words.map((w, i) =>
@@ -2558,7 +2631,7 @@
     const el = document.getElementById('send-confirm-status');
     el.innerHTML = '<div class="modal-loading">Signing and broadcasting...</div>';
     try {
-      const signRes = await rpc('signtx', [pendingPstx]);
+      const signRes = await signPstx(pendingPstx);
       if (signRes.error) throw new Error(signRes.error);
       if (walletIsMultisig) {
         pendingPstx = null;
@@ -4217,6 +4290,7 @@
       walletEncrypted = !!w.encrypted;
       walletUnlocked = !w.encrypted || !!w.unlocked;
       walletIsMultisig = w.type === 'multisig';
+      walletIsWatchOnly = w.type === 'watchOnly';
       walletMultisigM = w.m || 0;
       walletMultisigN = w.n || 0;
       updateLockIndicator();

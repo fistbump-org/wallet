@@ -8,7 +8,7 @@ members = ["bridge"]
 
 [package]
 name = "fistbump"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2021"
 
 [lib]
@@ -40,6 +40,10 @@ sha2 = "0.10"
 time = "0.3"
 webpki-roots = "1"
 ring = "0.17.14"
+hidapi = "2"
+bs58 = "0.5"
+bech32 = "0.11"
+hex = "0.4"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

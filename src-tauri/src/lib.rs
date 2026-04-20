@@ -13,6 +13,8 @@ use std::sync::Mutex;
 use tauri::Manager;
 
 mod proxy;
+#[cfg(desktop)]
+mod ledger;
 
 const MAX_LOG_LINES: usize = 500;
 
@@ -415,6 +417,30 @@ fn get_fbd_bundled_hash() -> String {
 fn get_api_key_cmd(state: tauri::State<'_, AppState>) -> Option<String> {
     let settings = state.settings.lock().unwrap();
     get_api_key(&settings)
+}
+
+// ── Ledger Stax (desktop only) ──
+
+#[cfg(desktop)]
+#[tauri::command]
+async fn ledger_get_account_xpub(account: u32) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || ledger::cmd_get_account_xpub(account))
+        .await
+        .map_err(|e| format!("ledger task panicked: {e}"))?
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+async fn ledger_sign_pstx(
+    pstx_hex: String,
+    network: String,
+    address_to_path: std::collections::HashMap<String, String>,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        ledger::cmd_sign_pstx(&pstx_hex, &network, &address_to_path)
+    })
+    .await
+    .map_err(|e| format!("ledger task panicked: {e}"))?
 }
 
 #[tauri::command]
@@ -1825,6 +1851,10 @@ pub fn run() {
             revoke_approved_origin,
             #[cfg(desktop)]
             set_active_wallet,
+            #[cfg(desktop)]
+            ledger_get_account_xpub,
+            #[cfg(desktop)]
+            ledger_sign_pstx,
         ])
         .setup(|app| {
             // On desktop, check whether we should offer to copy wallets from a
