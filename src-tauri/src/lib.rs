@@ -13,8 +13,102 @@ use std::sync::Mutex;
 use tauri::Manager;
 
 mod proxy;
-#[cfg(desktop)]
 mod ledger;
+
+// Android BLE JNI glue.
+//
+// btleplug's droidplug init, runtime permission prompts, and class
+// resolution for LedgerBleBridge all live here. This module uses the
+// `btleplug_jni` alias (jni 0.19) throughout because btleplug 0.11 pins
+// that version; keeping the whole Android-BLE slice on one jni version
+// avoids type-system pain with our other JNI code (biometric, browse)
+// which uses jni 0.21.
+//
+// Key trick: the JNI entry point is called *from Kotlin's
+// MainActivity.onCreate*, which means we're on the app's main thread
+// with the app's class loader. We cache (a) the `JavaVM` and (b) a
+// global ref to the `LedgerBleBridge` class — the class ref lets
+// `ensure_permissions` call static methods later from a Rust-spawned
+// thread whose default class loader is the *system* one and can't
+// otherwise resolve app classes.
+#[cfg(target_os = "android")]
+pub mod android_ble {
+    use btleplug_jni::{
+        objects::{GlobalRef, JClass, JObject},
+        JNIEnv, JavaVM,
+    };
+    use std::sync::OnceLock;
+
+    static JAVA_VM: OnceLock<JavaVM> = OnceLock::new();
+    static LEDGER_BRIDGE_CLASS: OnceLock<GlobalRef> = OnceLock::new();
+
+    #[no_mangle]
+    pub extern "system" fn Java_org_fistbump_wallet_LedgerBleBridge_nativeBtleplugInit(
+        env: JNIEnv,
+        cls: JClass,
+    ) {
+        // Cache before btleplug init so even if init errors we still
+        // have the class ref available for permission prompts.
+        if let Ok(gref) = env.new_global_ref(JObject::from(cls)) {
+            let _ = LEDGER_BRIDGE_CLASS.set(gref);
+        }
+        if let Ok(vm) = env.get_java_vm() {
+            let _ = JAVA_VM.set(vm);
+        }
+        // jni-utils needs its own class-cache seeded separately — btleplug
+        // 0.11 depends on it but never calls its init, which would leave
+        // the cache empty and JFuture::from_env panicking on first use.
+        if let Err(e) = jni_utils::init(&env) {
+            eprintln!("[jni-utils] init failed: {e}");
+        }
+        if let Err(e) = btleplug::platform::init(&env) {
+            eprintln!("[btleplug] init failed: {e}");
+        }
+    }
+
+    /// Attach the current thread to the JVM (idempotent). btleplug's
+    /// droidplug expects all its callers to be attached — on Android the
+    /// Java layer does the actual BLE work and our Rust code just holds
+    /// refs into it. Tokio-spawned threads start detached; calling this
+    /// from every top-level BLE op fixes that.
+    pub fn attach_current_thread() -> Result<(), String> {
+        let vm = JAVA_VM
+            .get()
+            .ok_or("BLE JVM not cached — MainActivity.onCreate may not have run")?;
+        vm.attach_current_thread_permanently()
+            .map(|_| ())
+            .map_err(|e| format!("attach_current_thread: {e}"))
+    }
+
+    /// Synchronously prompt (if needed) for BLUETOOTH_{SCAN,CONNECT} (API
+    /// 31+) or ACCESS_FINE_LOCATION (older). Blocks up to ~60s on the
+    /// calling thread waiting for the user's tap.
+    pub fn ensure_permissions() -> Result<(), String> {
+        let vm = JAVA_VM
+            .get()
+            .ok_or("BLE JVM not cached — MainActivity.onCreate may not have run")?;
+        let env = vm
+            .attach_current_thread()
+            .map_err(|e| format!("attach JNI thread: {e}"))?;
+        let cls_ref = LEDGER_BRIDGE_CLASS
+            .get()
+            .ok_or("LedgerBleBridge class not cached")?;
+        // Static-method call needs a JClass. GlobalRef<JObject> → JClass
+        // is a zero-cost typed view over the same underlying JNI handle.
+        let cls: JClass = From::from(cls_ref.as_obj());
+        let granted = env
+            .call_static_method(cls, "ensurePermissions", "()Z", &[])
+            .map_err(|e| format!("call ensurePermissions: {e}"))?
+            .z()
+            .map_err(|e| format!("ensurePermissions return: {e}"))?;
+        if !granted {
+            return Err(
+                "Bluetooth permission denied — grant it in Settings and try again".into(),
+            );
+        }
+        Ok(())
+    }
+}
 
 const MAX_LOG_LINES: usize = 500;
 
@@ -419,28 +513,85 @@ fn get_api_key_cmd(state: tauri::State<'_, AppState>) -> Option<String> {
     get_api_key(&settings)
 }
 
-// ── Ledger Stax (desktop only) ──
+// ── Ledger (USB is desktop-only; BLE works on desktop + iOS + Android) ──
 
-#[cfg(desktop)]
 #[tauri::command]
-async fn ledger_get_account_xpub(account: u32) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || ledger::cmd_get_account_xpub(account))
-        .await
-        .map_err(|e| format!("ledger task panicked: {e}"))?
+async fn ledger_get_account_xpub(
+    account: u32,
+    transport: Option<String>,
+    device_id: Option<String>,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        ledger::cmd_get_account_xpub(
+            account,
+            transport.as_deref().unwrap_or("auto"),
+            device_id.as_deref(),
+        )
+    })
+    .await
+    .map_err(|e| format!("ledger task panicked: {e}"))?
 }
 
-#[cfg(desktop)]
 #[tauri::command]
 async fn ledger_sign_pstx(
     pstx_hex: String,
     network: String,
     address_to_path: std::collections::HashMap<String, String>,
+    transport: Option<String>,
+    device_id: Option<String>,
 ) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        ledger::cmd_sign_pstx(&pstx_hex, &network, &address_to_path)
+        ledger::cmd_sign_pstx(
+            &pstx_hex,
+            &network,
+            &address_to_path,
+            transport.as_deref().unwrap_or("auto"),
+            device_id.as_deref(),
+        )
     })
     .await
     .map_err(|e| format!("ledger task panicked: {e}"))?
+}
+
+#[tauri::command]
+async fn ledger_sign_message(
+    path: String,
+    message: String,
+    transport: Option<String>,
+    device_id: Option<String>,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        ledger::cmd_sign_message(
+            &path,
+            &message,
+            transport.as_deref().unwrap_or("auto"),
+            device_id.as_deref(),
+        )
+    })
+    .await
+    .map_err(|e| format!("ledger sign_message task panicked: {e}"))?
+}
+
+#[tauri::command]
+async fn ledger_ble_scan(timeout_secs: Option<u32>) -> Result<Vec<ledger::ble::BleDeviceInfo>, String> {
+    let t = timeout_secs.unwrap_or(0);
+    tauri::async_runtime::spawn_blocking(move || ledger::ble::scan(t))
+        .await
+        .map_err(|e| format!("ledger BLE scan task panicked: {e}"))?
+}
+
+#[tauri::command]
+async fn ledger_ble_connect(device_id: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || ledger::ble::connect(&device_id))
+        .await
+        .map_err(|e| format!("ledger BLE connect task panicked: {e}"))?
+}
+
+#[tauri::command]
+async fn ledger_ble_forget(device_id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || ledger::ble::forget(&device_id))
+        .await
+        .map_err(|e| format!("ledger BLE forget task panicked: {e}"))?
 }
 
 #[tauri::command]
@@ -1851,10 +2002,12 @@ pub fn run() {
             revoke_approved_origin,
             #[cfg(desktop)]
             set_active_wallet,
-            #[cfg(desktop)]
             ledger_get_account_xpub,
-            #[cfg(desktop)]
             ledger_sign_pstx,
+            ledger_sign_message,
+            ledger_ble_scan,
+            ledger_ble_connect,
+            ledger_ble_forget,
         ])
         .setup(|app| {
             // On desktop, check whether we should offer to copy wallets from a

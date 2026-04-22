@@ -8,7 +8,7 @@ members = ["bridge"]
 
 [package]
 name = "fistbump"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 
 [lib]
@@ -40,16 +40,32 @@ sha2 = "0.10"
 time = "0.3"
 webpki-roots = "1"
 ring = "0.17.14"
-hidapi = "2"
 bs58 = "0.5"
 bech32 = "0.11"
 hex = "0.4"
+btleplug = "0.11"
+uuid = "1"
+futures = "0.3"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+# USB HID Ledger transport is desktop-only (hidapi doesn't compile on mobile).
+[target.'cfg(not(any(target_os = "ios", target_os = "android")))'.dependencies]
+hidapi = "2"
+
 [target.'cfg(target_os = "android")'.dependencies]
 jni = { version = "0.21", default-features = false }
+# btleplug 0.11 pins jni 0.19, so we keep a separate alias just for the
+# btleplug init FFI entry point. Both versions coexist in the graph —
+# they're different compiled crates, but wrap the same underlying C-level
+# JNI pointers, so the separation is purely a Rust type-system concern.
+btleplug_jni = { package = "jni", version = "0.19", default-features = false }
+# btleplug 0.11 itself depends on jni-utils but — somewhat famously — never
+# calls its `init()`, leaving the classcache for io.github.gedgygedgy.rust.*
+# empty and causing runtime panics in JFuture::from_env. We pull it in
+# directly so we can call `jni_utils::init(&env)` ourselves at startup.
+jni-utils = "0.1"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 winreg = "0.52"

@@ -300,6 +300,7 @@
         <div class="section-card">
           <div class="section-label">Actions</div>
           <div class="btn" id="btn-show-recovery-qr">Show Recovery QR</div>
+          <div class="btn" id="btn-verify-message">Verify Message</div>
           <div class="btn" id="btn-rescan">Rescan Wallet</div>
           <div id="rescan-status"></div>
         </div>
@@ -350,7 +351,7 @@
             </div>
           </div>
         </div>
-        <div class="section-card">
+        <div class="section-card" id="settings-mining-card">
           <div class="section-label">Mining</div>
           <div class="fb-list">
             <div class="fb-row">
@@ -419,6 +420,7 @@
         <div id="nd-bid-section"></div>
         <div id="nd-records"></div>
         <div id="nd-transfer-section"></div>
+        <div id="nd-sign-section"></div>
         <div id="nd-bids"></div>
       </section>
     </main>
@@ -645,6 +647,55 @@
         <div class="btn btn-flex" id="repair-auto">Auto-Recover</div>
       </div>
       <div id="repair-status"></div>
+    </div>
+  </div>
+</div>
+<div class="modal-overlay hidden" id="verify-msg-modal">
+  <div class="modal-card">
+    <div class="modal-header">
+      <div class="modal-header-text">
+        <h2>Verify Message</h2>
+        <div class="modal-subtitle">Check that a signature was produced by the owner of a name.</div>
+      </div>
+      <div class="close-btn" id="verify-msg-close">&times;</div>
+    </div>
+    <div class="fb-list">
+      <div class="field">
+        <label>Name</label>
+        <input type="text" id="verify-msg-name" placeholder="name" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+      </div>
+      <div class="field">
+        <label>Message</label>
+        <textarea id="verify-msg-text" rows="4" placeholder="the message that was signed" autocomplete="off" autocorrect="off" spellcheck="false"></textarea>
+      </div>
+      <div class="field">
+        <label>Signature</label>
+        <textarea id="verify-msg-sig" rows="3" class="textarea-code" placeholder="base64 signature" autocomplete="off" autocorrect="off" spellcheck="false"></textarea>
+      </div>
+      <div id="verify-msg-status"></div>
+      <div class="confirm-actions">
+        <div class="btn" id="verify-msg-cancel">Close</div>
+        <div class="btn primary" id="verify-msg-submit">Verify</div>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="modal-overlay hidden" id="ledger-ble-modal">
+  <div class="modal-card">
+    <div class="modal-header">
+      <div class="modal-header-text">
+        <h2>Connect via Bluetooth</h2>
+        <div class="modal-subtitle">Unlock your Ledger and open the Fistbump app — it should appear below.</div>
+      </div>
+      <div class="close-btn" id="ledger-ble-close">&times;</div>
+    </div>
+    <div class="fb-list">
+      <div id="ledger-ble-status"></div>
+      <div id="ledger-ble-list" class="fb-list"></div>
+      <div class="confirm-actions">
+        <div class="btn" id="ledger-ble-cancel">Cancel</div>
+        <div class="btn primary" id="ledger-ble-rescan">Rescan</div>
+      </div>
     </div>
   </div>
 </div>

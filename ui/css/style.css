@@ -176,6 +176,7 @@ body.light {
   .wallet-item:hover { border-color: var(--accent); }
 }
 .wallet-item .wallet-arrow { color: var(--text-muted); font-size: 16px; }
+.wallet-item.disabled { opacity: 0.35; pointer-events: none; }
 .login-actions {
   display: flex;
   flex-direction: column;
@@ -278,7 +279,7 @@ body.light {
 .input-narrow { width: 80px; }
 .section-card-flush { padding: 0; overflow: hidden; }
 .stats-pad { padding: 16px 20px; }
-.textarea-code { width: 100%; resize: vertical; font-size: 11px; }
+.textarea-code { width: 100%; resize: none; font-size: 11px; }
 .textarea-sm { height: 60px; }
 .textarea-md { height: 80px; }
 .xpub-box { word-break: break-all; font-family: var(--fb-font-mono); font-size: 11px; padding: 8px; background: var(--bg-input); border-radius: 6px; user-select: all; }
@@ -1279,8 +1280,10 @@ a.tx-link { color: var(--accent); }
   color: var(--text-secondary);
   flex-shrink: 0;
 }
-.field input {
+.field input,
+.field textarea {
   flex: 1;
+  min-width: 0;
 }
 .field select {
   flex: 1;
@@ -2259,3 +2262,4 @@ body[data-platform="android"] #settings-resolving {
     color: var(--text);
   }
 }
+

@@ -25,6 +25,20 @@
   };
   document.body.dataset.platform = window.fistbump.platform;
 
+  // App Store / TestFlight / reviewer builds: Apple rejects any UI that
+  // lets users mine cryptocurrency on-device. The iOS overlay injects
+  // `window.__APP_STORE__ = true` at document-start before this script
+  // runs (see ios-overlay/Sources/fistbump/FBDNode.swift). Hide both the
+  // sidebar toggle and the Settings card entirely — the existing
+  // `handleMiningToggle` already refuses to start mining on those builds,
+  // but the reviewers want the surface gone, not just neutralized.
+  if (window.__APP_STORE__ === true) {
+    var mt = document.getElementById('mining-toggle');
+    var mc = document.getElementById('settings-mining-card');
+    if (mt) mt.classList.add('hidden');
+    if (mc) mc.classList.add('hidden');
+  }
+
   // Mobile sidebar toggle
   var hamburgerBtn = document.getElementById('hamburger-btn');
   var sidebar = document.querySelector('.sidebar');
@@ -979,6 +993,146 @@
     return res;
   }
 
+  // Build a status <div> with the given class and plain-text message.
+  // Avoids innerHTML so hostile-looking strings (error messages, device
+  // names) can't inject markup.
+  function statusDiv(cls, text) {
+    const d = document.createElement('div');
+    d.className = cls;
+    d.textContent = text;
+    return d;
+  }
+
+  // Opens the Bluetooth device picker modal and resolves with the chosen
+  // BLE device id (or null if the user cancelled).
+  function pickBleDevice() {
+    return new Promise(function(resolve) {
+      const modal = document.getElementById('ledger-ble-modal');
+      const list = document.getElementById('ledger-ble-list');
+      const status = document.getElementById('ledger-ble-status');
+      const rescanBtn = document.getElementById('ledger-ble-rescan');
+      const cancelBtn = document.getElementById('ledger-ble-cancel');
+      const closeBtn = document.getElementById('ledger-ble-close');
+
+      function finish(value) {
+        modal.classList.add('hidden');
+        rescanBtn.onclick = null;
+        cancelBtn.onclick = null;
+        closeBtn.onclick = null;
+        list.replaceChildren();
+        status.replaceChildren();
+        resolve(value);
+      }
+
+      function makeRow(device) {
+        const row = document.createElement('div');
+        row.className = 'wallet-item';
+        row.dataset.id = device.id;
+        const name = document.createElement('span');
+        name.textContent = device.name;
+        row.appendChild(name);
+        const arrow = document.createElement('span');
+        arrow.className = 'wallet-arrow';
+        arrow.textContent = '›';
+        row.appendChild(arrow);
+        row.addEventListener('click', async () => {
+          status.replaceChildren(statusDiv('modal-loading', 'Connecting to ' + device.name + '…'));
+          list.querySelectorAll('.wallet-item').forEach(x => x.classList.add('disabled'));
+          try {
+            await __invoke('ledger_ble_connect', { deviceId: device.id });
+            finish(device.id);
+          } catch (e) {
+            list.querySelectorAll('.wallet-item').forEach(x => x.classList.remove('disabled'));
+            status.replaceChildren(statusDiv('error-msg', 'Connect failed: ' + String((e && e.message) || e)));
+          }
+        });
+        return row;
+      }
+
+      async function doScan() {
+        list.replaceChildren();
+        status.replaceChildren(statusDiv('modal-loading', 'Scanning for Ledger devices…'));
+        rescanBtn.classList.add('disabled');
+        try {
+          const devices = await __invoke('ledger_ble_scan', { timeoutSecs: 5 });
+          rescanBtn.classList.remove('disabled');
+          if (!devices || devices.length === 0) {
+            status.replaceChildren(statusDiv('error-msg', 'No Ledger devices found. Unlock the device, open the Fistbump app, then Rescan.'));
+            return;
+          }
+          status.replaceChildren();
+          const frag = document.createDocumentFragment();
+          devices.forEach(d => frag.appendChild(makeRow(d)));
+          list.replaceChildren(frag);
+        } catch (e) {
+          rescanBtn.classList.remove('disabled');
+          status.replaceChildren(statusDiv('error-msg', 'Scan failed: ' + String((e && e.message) || e)));
+        }
+      }
+
+      rescanBtn.onclick = doScan;
+      cancelBtn.onclick = function() { finish(null); };
+      closeBtn.onclick = function() { finish(null); };
+      modal.classList.remove('hidden');
+      doScan();
+    });
+  }
+
+  // Sign a message with a name's owner key, routing through the Ledger
+  // when the active wallet is watch-only. fbd's `signmessagewithname` RPC
+  // can't handle that case (no local private key), so for watch-only we
+  // resolve the path client-side and drive the Ledger's sign_message APDU
+  // directly, returning the 65-byte recoverable signature base64-encoded
+  // — the same wire format fbd produces for regular wallets, so
+  // `verifymessagewithname` works against both.
+  async function signMessageWithName(name, message) {
+    if (!walletIsWatchOnly) {
+      var r = await rpc('signmessagewithname', [name, message]);
+      if (r.error) throw new Error(r.error);
+      return r.result;
+    }
+    var infoRes = await rpc('getnameinfo', [name]);
+    if (infoRes.error) throw new Error(infoRes.error);
+    var owner = infoRes.result && infoRes.result.owner;
+    if (!owner || !owner.address) throw new Error('name has no owner');
+    var check = await rpc('validateaddress', [owner.address]);
+    if (!check.result || !check.result.ismine) {
+      throw new Error('you do not own this name');
+    }
+    var addrList = await rpc('listaddresses');
+    if (addrList.error) throw new Error(addrList.error);
+    var entry = (addrList.result || []).find(function(a) { return a.address === owner.address; });
+    if (!entry || !entry.path) throw new Error('no derivation path for name owner address');
+
+    var stored = activeWallet ? localStorage.getItem('ledger_ble_' + activeWallet) : null;
+    var args = {
+      path: entry.path,
+      message: message,
+      transport: window.fistbump.mobile ? 'ble' : 'auto',
+    };
+    if (stored) args.deviceId = stored;
+    if (window.fistbump.mobile && !stored) {
+      var picked = await pickBleDevice();
+      if (!picked) throw new Error('Ledger: no device selected');
+      if (activeWallet) localStorage.setItem('ledger_ble_' + activeWallet, picked);
+      args.deviceId = picked;
+    }
+    try {
+      return await __invoke('ledger_sign_message', args);
+    } catch (e) {
+      var msg = String((e && e.message) || e);
+      if (!window.fistbump.mobile && msg.startsWith('no Ledger device found') && !stored && activeWallet) {
+        var picked2 = await pickBleDevice();
+        if (!picked2) throw new Error('Ledger: ' + msg);
+        localStorage.setItem('ledger_ble_' + activeWallet, picked2);
+        args.deviceId = picked2;
+        args.transport = 'ble';
+        return await __invoke('ledger_sign_message', args);
+      }
+      throw new Error(msg);
+    }
+  }
+
   // Sign a PSTX, routing through the Ledger when the active wallet is
   // watch-only (xpub-only). Mimics the rpc('signtx', [pstx]) response shape so
   // callers can keep their existing { result: { pstx, signatures } } handling.
@@ -986,22 +1140,49 @@
     if (!walletIsWatchOnly) {
       return rpc('signtx', [pstxHex]);
     }
-    try {
-      const addrRes = await rpc('listaddresses');
-      if (addrRes.error) return { error: addrRes.error };
-      const map = {};
-      const addrList = addrRes.result || [];
-      for (const a of addrList) {
-        if (a && a.address && a.path) map[a.address] = a.path;
+    const addrRes = await rpc('listaddresses');
+    if (addrRes.error) return { error: addrRes.error };
+    const map = {};
+    for (const a of (addrRes.result || [])) {
+      if (a && a.address && a.path) map[a.address] = a.path;
+    }
+    // Desktop: USB-first with BLE fallback if a device is paired.
+    // Mobile: BLE only — prompt for a device if none is paired yet.
+    const stored = activeWallet ? localStorage.getItem('ledger_ble_' + activeWallet) : null;
+    const args = { pstxHex: pstxHex, network: 'main', addressToPath: map };
+    if (window.fistbump.mobile) {
+      let id = stored;
+      if (!id) {
+        id = await pickBleDevice();
+        if (!id) return { error: 'Ledger: no device selected' };
+        if (activeWallet) localStorage.setItem('ledger_ble_' + activeWallet, id);
       }
-      const signed = await __invoke('ledger_sign_pstx', {
-        pstxHex: pstxHex,
-        network: 'main',
-        addressToPath: map
-      });
+      args.transport = 'ble';
+      args.deviceId = id;
+    } else {
+      args.transport = 'auto';
+      if (stored) args.deviceId = stored;
+    }
+    try {
+      const signed = await __invoke('ledger_sign_pstx', args);
       return { result: { pstx: signed, signatures: 1 } };
     } catch (e) {
-      return { error: 'Ledger: ' + ((e && e.message) || String(e)) };
+      const msg = String((e && e.message) || e);
+      // Desktop auto-fallback: no USB, no paired BLE → offer a picker once.
+      if (!window.fistbump.mobile && msg.startsWith('no Ledger device found') && !stored && activeWallet) {
+        const picked = await pickBleDevice();
+        if (!picked) return { error: 'Ledger: ' + msg };
+        localStorage.setItem('ledger_ble_' + activeWallet, picked);
+        try {
+          args.deviceId = picked;
+          args.transport = 'ble';
+          const signed = await __invoke('ledger_sign_pstx', args);
+          return { result: { pstx: signed, signatures: 1 } };
+        } catch (e2) {
+          return { error: 'Ledger: ' + String((e2 && e2.message) || e2) };
+        }
+      }
+      return { error: 'Ledger: ' + msg };
     }
   }
 
@@ -1420,8 +1601,9 @@
     document.getElementById('new-wallet-name').value = '';
     document.getElementById('import-field').classList.add('hidden');
     document.getElementById('btn-login-submit').textContent = 'Connect Ledger';
-    document.getElementById('login-form-status').textContent =
-      'Plug in your Ledger, unlock it, and open the Fistbump app — then click Connect Ledger.';
+    document.getElementById('login-form-status').textContent = window.fistbump.mobile
+      ? 'Unlock your Ledger and open the Fistbump app — it will appear in the Bluetooth picker.'
+      : 'Plug in your Ledger (or use Bluetooth), unlock it, and open the Fistbump app — then click Connect Ledger.';
     await showLoginPage('login-page-create');
   });
 
@@ -1654,6 +1836,7 @@
       return;
     }
     const params = [name];
+    let ledgerBleDeviceId = null;
     if (isImporting) {
       const words = Array.from(document.querySelectorAll('.import-word')).map(i => i.value.trim().toLowerCase());
       const phrase = words.join(' ');
@@ -1663,13 +1846,52 @@
       }
       params.push(phrase);
     } else if (isLedger) {
-      el.innerHTML = '<div class="modal-loading">Talking to Ledger… approve on device if prompted.</div>';
       let xpub;
-      try {
-        xpub = await __invoke('ledger_get_account_xpub', { account: 0 });
-      } catch (e) {
-        el.innerHTML = '<div class="error-msg">Ledger error: ' + esc(String(e)) + '</div>';
-        return;
+      // On mobile there's no USB Ledger — skip straight to BLE picker.
+      if (window.fistbump.mobile) {
+        el.replaceChildren();
+        const picked = await pickBleDevice();
+        if (!picked) {
+          el.innerHTML = '<div class="error-msg">Connect cancelled.</div>';
+          return;
+        }
+        ledgerBleDeviceId = picked;
+        el.innerHTML = '<div class="modal-loading">Fetching xpub over Bluetooth — approve on device.</div>';
+        try {
+          xpub = await __invoke('ledger_get_account_xpub', {
+            account: 0, transport: 'ble', deviceId: picked
+          });
+        } catch (e) {
+          el.innerHTML = '<div class="error-msg">Ledger error: ' + esc(String((e && e.message) || e)) + '</div>';
+          return;
+        }
+      } else {
+        el.innerHTML = '<div class="modal-loading">Talking to Ledger… approve on device if prompted.</div>';
+        try {
+          xpub = await __invoke('ledger_get_account_xpub', { account: 0 });
+        } catch (e) {
+          const msg = String((e && e.message) || e);
+          if (!msg.startsWith('no Ledger device found')) {
+            el.innerHTML = '<div class="error-msg">Ledger error: ' + esc(msg) + '</div>';
+            return;
+          }
+          el.replaceChildren();
+          const picked = await pickBleDevice();
+          if (!picked) {
+            el.innerHTML = '<div class="error-msg">Connect cancelled.</div>';
+            return;
+          }
+          ledgerBleDeviceId = picked;
+          el.innerHTML = '<div class="modal-loading">Fetching xpub over Bluetooth — approve on device.</div>';
+          try {
+            xpub = await __invoke('ledger_get_account_xpub', {
+              account: 0, transport: 'ble', deviceId: picked
+            });
+          } catch (e2) {
+            el.innerHTML = '<div class="error-msg">Ledger error: ' + esc(String((e2 && e2.message) || e2)) + '</div>';
+            return;
+          }
+        }
       }
       // Refuse to add the same Ledger account twice — it'd just create a second
       // wallet watching the same addresses with no actual difference.
@@ -1696,6 +1918,9 @@
       const res = await rpc('createwallet', params, { wallet: null });
       if (res.error) throw new Error(res.error);
       const result = res.result;
+      if (ledgerBleDeviceId && result && result.name) {
+        localStorage.setItem('ledger_ble_' + result.name, ledgerBleDeviceId);
+      }
 
       if (result.mnemonic && !isImporting && !isLedger) {
         const words = result.mnemonic.split(' ');
@@ -1746,6 +1971,7 @@
         return;
       }
       currentNameDetail = null;
+      currentNameDetailIsMine = false;
       var main = document.querySelector('main');
       main.style.opacity = '0';
       await new Promise(r => setTimeout(r, 100));
@@ -2764,6 +2990,11 @@
   // Keyed per wallet: { walletName: { name: { action, txid, ... } } }
   var allPendingNameActions = {};
   var currentNameDetail = null; // name currently being viewed
+  // True when the current name-detail view is for a name this wallet owns.
+  // Owned names get management UI (edit records, transfer, etc.) that the
+  // block/wallet auto-refresh would wipe mid-edit — so we skip the refresh
+  // there and rely on manual reload.
+  var currentNameDetailIsMine = false;
 
   function getPendingNameActions() {
     if (!activeWallet) return {};
@@ -2794,6 +3025,7 @@
     document.getElementById('nd-bid-section').innerHTML = '';
     document.getElementById('nd-records').innerHTML = '';
     document.getElementById('nd-transfer-section').innerHTML = '';
+    document.getElementById('nd-sign-section').innerHTML = '';
     document.getElementById('nd-bids').innerHTML = '';
     main.style.opacity = '1';
 
@@ -2818,6 +3050,7 @@
           isMine = ownerCheck.result && ownerCheck.result.ismine;
         } catch(e) {}
       }
+      currentNameDetailIsMine = !!isMine;
 
       // Check for OUR pending (unconfirmed) transactions on this name
       var walletPending = getPendingNameActions();
@@ -3497,7 +3730,12 @@
             setPendingNameAction(name, 'Update', r.result.txid || r.result);
             openNameDetail(name);
           } catch(e) {
-            st.innerHTML = '<div class="error-msg">' + esc(friendlyError(e.message)) + '</div>';
+            var raw = (e && e.message) || String(e);
+            st.replaceChildren();
+            var d = document.createElement('div');
+            d.className = 'error-msg';
+            d.textContent = raw;
+            st.appendChild(d);
           }
         });
       } else {
@@ -3535,6 +3773,108 @@
           '</div></div>';
       } else {
         transferEl.innerHTML = '';
+      }
+
+      // Sign Message section — only for owned, registered names.
+      var signEl = document.getElementById('nd-sign-section');
+      if (isMine && info.state === 'CLOSED' && info.registered) {
+        signEl.replaceChildren();
+        var card = document.createElement('div');
+        card.className = 'section-card';
+        var label = document.createElement('div');
+        label.className = 'section-label';
+        label.textContent = 'Sign Message';
+        card.appendChild(label);
+        // Body wrapped in .fb-list so hint / field / button / status pick
+        // up consistent vertical gaps without per-element margins.
+        var body = document.createElement('div');
+        body.className = 'fb-list';
+        var hint = document.createElement('div');
+        hint.className = 'muted info-text';
+        hint.textContent = 'Produce a signature proving you own "' + name + '". Paste the signed message + signature to whoever needs to verify ownership.';
+        body.appendChild(hint);
+        var field = document.createElement('div');
+        field.className = 'field';
+        var ta = document.createElement('textarea');
+        ta.id = 'nd-sign-msg';
+        ta.setAttribute('placeholder', 'Message to sign');
+        ta.setAttribute('autocomplete', 'off');
+        ta.setAttribute('autocorrect', 'off');
+        ta.setAttribute('spellcheck', 'false');
+        field.appendChild(ta);
+        body.appendChild(field);
+        var btn = document.createElement('div');
+        btn.className = 'btn primary self-end';
+        btn.id = 'btn-nd-sign-msg';
+        btn.textContent = 'Sign';
+        body.appendChild(btn);
+        var out = document.createElement('div');
+        out.id = 'nd-sign-status';
+        body.appendChild(out);
+        card.appendChild(body);
+        signEl.appendChild(card);
+
+        btn.addEventListener('click', async function() {
+          var msg = ta.value;
+          if (!msg) {
+            out.replaceChildren();
+            var err = document.createElement('div');
+            err.className = 'error-msg';
+            err.textContent = 'Enter a message to sign.';
+            out.appendChild(err);
+            return;
+          }
+          out.replaceChildren();
+          var loading = document.createElement('div');
+          loading.className = 'modal-loading';
+          loading.textContent = walletIsWatchOnly
+            ? 'Talking to Ledger — approve on device.'
+            : 'Signing…';
+          out.appendChild(loading);
+          try {
+            var sig = await signMessageWithName(name, msg);
+            out.replaceChildren();
+            // Display the signature with a copy button. Using DOM methods
+            // (not innerHTML) because `sig` is opaque bytes and `msg` is
+            // user-controlled.
+            var ok = document.createElement('div');
+            ok.className = 'success-msg';
+            ok.textContent = 'Signed.';
+            out.appendChild(ok);
+            var sigRow = document.createElement('div');
+            sigRow.className = 'fb-list';
+            var sigField = document.createElement('div');
+            sigField.className = 'field';
+            var sigLabel = document.createElement('label');
+            sigLabel.textContent = 'Signature (base64)';
+            sigField.appendChild(sigLabel);
+            var sigTa = document.createElement('textarea');
+            sigTa.className = 'textarea-code';
+            sigTa.rows = 3;
+            sigTa.readOnly = true;
+            sigTa.value = sig;
+            sigField.appendChild(sigTa);
+            sigRow.appendChild(sigField);
+            out.appendChild(sigRow);
+            var copyBtn = document.createElement('div');
+            copyBtn.className = 'btn btn-sm';
+            copyBtn.textContent = 'Copy';
+            copyBtn.addEventListener('click', function() {
+              navigator.clipboard.writeText(sig);
+              copyBtn.textContent = 'Copied';
+              setTimeout(function() { copyBtn.textContent = 'Copy'; }, 1500);
+            });
+            out.appendChild(copyBtn);
+          } catch(e) {
+            out.replaceChildren();
+            var err2 = document.createElement('div');
+            err2.className = 'error-msg';
+            err2.textContent = String((e && e.message) || e);
+            out.appendChild(err2);
+          }
+        });
+      } else {
+        signEl.replaceChildren();
       }
 
       // Open auction button (rendered in nd-bid-section above)
@@ -3842,6 +4182,7 @@
       document.getElementById('nd-bid-section').innerHTML = '';
       document.getElementById('nd-records').innerHTML = '';
       document.getElementById('nd-transfer-section').innerHTML = '';
+      document.getElementById('nd-sign-section').innerHTML = '';
       document.getElementById('nd-bids').textContent = '';
     }
     // Restore scroll position on refresh (after DOM rebuild)
@@ -4039,16 +4380,16 @@
     btn.style.opacity = '0.5';
     btn.style.pointerEvents = 'none';
     try {
+      // walletSend routes through the watch-only / multisig flow when needed.
       var r;
       if (action === 'reveal') {
-        r = await rpc('sendreveal', [name]);
+        r = await walletSend('sendreveal', [name]);
       } else if (action === 'register') {
-        r = await rpc('sendregister', [name]);
+        r = await walletSend('sendregister', [name]);
       } else if (action === 'redeem') {
-        r = await rpc('sendredeem', [name]);
+        r = await walletSend('sendredeem', [name]);
       }
-      if (r && r.error) throw new Error(r.error);
-      var txid = r.result && (r.result.txid || (r.result.txids && r.result.txids[0]) || r.result);
+      var txid = r && (r.txid || (r.txids && r.txids[0]) || r);
       showToast(action.charAt(0).toUpperCase() + action.slice(1) + ' sent', typeof txid === 'string' ? txid : null);
       btn.textContent = 'Done';
       btn.className = 'btn btn-sm';
@@ -4262,18 +4603,34 @@
     return { multisig: true, txid: 'pending cosigner signatures' };
   }
 
-  /// Wrapper: for multisig wallets, use createtx+signtx flow.
-  /// For regular wallets, call the normal send RPC directly.
-  /// Maps send<Action> to createtx <action> params.
+  /// Wrapper: routes name-operation send calls based on wallet type.
+  ///   Regular:    `send<action>` RPC directly.
+  ///   Multisig:   createtx <action> → signtx → multisig-completion modal.
+  ///   Watch-only: createtx <action> → signPstx (Ledger) → broadcasttx.
   async function walletSend(sendMethod, params) {
-    if (!walletIsMultisig) {
-      var r = await rpc(sendMethod, params);
-      if (r.error) throw new Error(r.error);
-      return r.result;
+    if (walletIsMultisig) {
+      var action = sendMethod.replace('send', '');
+      return multisigAction(action, params);
     }
-    // Map sendopen → "open", sendbid → "bid", etc.
-    var action = sendMethod.replace('send', '');
-    return multisigAction(action, params);
+    if (walletIsWatchOnly) {
+      var actionWo = sendMethod.replace('send', '');
+      console.log('[walletSend] watch-only: createtx', actionWo, params);
+      var createRes = await rpc('createtx', [actionWo].concat(params || []));
+      if (createRes.error) throw new Error('createtx ' + actionWo + ': ' + createRes.error);
+      var pstxHex = (createRes.result && (createRes.result.pstx || createRes.result.hex)) || createRes.result;
+      console.log('[walletSend] watch-only: signPstx pstx=' + (pstxHex && pstxHex.length) + ' chars');
+      var signRes = await signPstx(pstxHex);
+      if (signRes.error) throw new Error('sign: ' + signRes.error);
+      var signedPstx = signRes.result.pstx;
+      console.log('[walletSend] watch-only: broadcasttx signed=' + signedPstx.length + ' chars');
+      var broadRes = await rpc('broadcasttx', [signedPstx]);
+      if (broadRes.error) throw new Error('broadcasttx: ' + broadRes.error);
+      console.log('[walletSend] watch-only: txid=' + JSON.stringify(broadRes.result));
+      return broadRes.result;
+    }
+    var r = await rpc(sendMethod, params);
+    if (r.error) throw new Error(r.error);
+    return r.result;
   }
 
   // ---- Wallet Management ----
@@ -4295,11 +4652,21 @@
       walletMultisigN = w.n || 0;
       updateLockIndicator();
 
+      // Watch-only wallets (today: Ledger-backed) have no local secret,
+      // so every security-and-recovery affordance is a no-op. Hide the
+      // whole lot instead of surfacing disabled controls.
+      var encRow = document.getElementById('wallet-encryption-row');
+      var secCard = document.getElementById('wallet-security-card');
+      var recoveryBtn = document.getElementById('btn-show-recovery-qr');
+      if (encRow) encRow.classList.toggle('hidden', walletIsWatchOnly);
+      if (secCard) secCard.classList.toggle('hidden', walletIsWatchOnly);
+      if (recoveryBtn) recoveryBtn.classList.toggle('hidden', walletIsWatchOnly);
+
       // Show biometric enable/disable buttons if supported and wallet is encrypted
       var bioEnabled = localStorage.getItem('biometric_' + activeWallet) === '1';
       var enableBtn = document.getElementById('btn-enable-biometric');
       var disableBtn = document.getElementById('btn-disable-biometric');
-      if (biometricSupported && walletEncrypted) {
+      if (biometricSupported && walletEncrypted && !walletIsWatchOnly) {
         enableBtn.classList.toggle('hidden', bioEnabled);
         disableBtn.classList.toggle('hidden', !bioEnabled);
       } else {
@@ -4532,6 +4899,63 @@
 
     } catch(e) {
       statusEl.innerHTML = '<div class="error-msg">Could not access camera: ' + esc(e.message) + '</div>';
+    }
+  });
+
+  // Verify Message modal — generic, works against any wallet type since
+  // `verifymessagewithname` only needs the on-chain owner pubkey.
+  document.getElementById('btn-verify-message').addEventListener('click', function() {
+    document.getElementById('verify-msg-name').value = '';
+    document.getElementById('verify-msg-text').value = '';
+    document.getElementById('verify-msg-sig').value = '';
+    document.getElementById('verify-msg-status').replaceChildren();
+    document.getElementById('verify-msg-modal').classList.remove('hidden');
+  });
+  document.getElementById('verify-msg-close').addEventListener('click', function() {
+    document.getElementById('verify-msg-modal').classList.add('hidden');
+  });
+  document.getElementById('verify-msg-cancel').addEventListener('click', function() {
+    document.getElementById('verify-msg-modal').classList.add('hidden');
+  });
+  document.getElementById('verify-msg-submit').addEventListener('click', async function() {
+    var nameEl = document.getElementById('verify-msg-name');
+    var msgEl = document.getElementById('verify-msg-text');
+    var sigEl = document.getElementById('verify-msg-sig');
+    var statusEl = document.getElementById('verify-msg-status');
+    statusEl.replaceChildren();
+    var nameVal = nameEl.value.trim();
+    var msgVal = msgEl.value;
+    var sigVal = sigEl.value.trim();
+    if (!nameVal || !sigVal) {
+      var err = document.createElement('div');
+      err.className = 'error-msg';
+      err.textContent = 'Name and signature are required.';
+      statusEl.appendChild(err);
+      return;
+    }
+    var loading = document.createElement('div');
+    loading.className = 'modal-loading';
+    loading.textContent = 'Verifying…';
+    statusEl.appendChild(loading);
+    try {
+      var r = await rpc('verifymessagewithname', [nameVal, sigVal, msgVal]);
+      if (r.error) throw new Error(r.error);
+      statusEl.replaceChildren();
+      var resultEl = document.createElement('div');
+      if (r.result === true) {
+        resultEl.className = 'success-msg';
+        resultEl.textContent = '✓ Valid — signature was produced by the owner of "' + nameVal + '".';
+      } else {
+        resultEl.className = 'error-msg';
+        resultEl.textContent = '✗ Invalid — signature does not match the owner of "' + nameVal + '".';
+      }
+      statusEl.appendChild(resultEl);
+    } catch(e) {
+      statusEl.replaceChildren();
+      var err2 = document.createElement('div');
+      err2.className = 'error-msg';
+      err2.textContent = String((e && e.message) || e);
+      statusEl.appendChild(err2);
     }
   });
 
@@ -5055,8 +5479,10 @@
           _esLastProgress = msg.progress;
           _blockToast = true;
           updateStatusBar(msg.height, msg.progress, msg.peers);
-          // Refresh name detail page on every block (auction state may change)
-          if (currentNameDetail && !document.activeElement.matches('input, textarea, select')) {
+          // Refresh name detail on every block — but not for names we own,
+          // since the management UI (records editor, transfer, etc.) would
+          // lose in-progress edits.
+          if (currentNameDetail && !currentNameDetailIsMine && !document.activeElement.matches('input, textarea, select')) {
             openNameDetail(currentNameDetail);
           }
         } else if (msg.type === 'peers') {
@@ -5067,8 +5493,9 @@
           if (activeWallet) {
             refreshTxList();
             if (_esLastProgress >= 0.999) refreshOverviewActions();
-            // Refresh name detail page (wallet event fires after block indexing, so data is fresh)
-            if (currentNameDetail && !document.activeElement.matches('input, textarea, select')) {
+            // Refresh name detail on wallet events (post-block indexing) —
+            // skip for owned names to avoid wiping management-UI edits.
+            if (currentNameDetail && !currentNameDetailIsMine && !document.activeElement.matches('input, textarea, select')) {
               openNameDetail(currentNameDetail);
             }
           }

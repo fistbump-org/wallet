@@ -26,7 +26,16 @@ class MainActivity : TauriActivity() {
     super.onCreate(savedInstanceState)
     BiometricBridge.setActivity(this)
     BrowserBridge.setActivity(this)
+    // LedgerBleBridge needs the activity to hand to its permission launcher,
+    // and the launcher must be registered during onCreate (ActivityResult
+    // contract requirement). The bridge is a no-op until Rust calls into
+    // it from the BLE code path.
+    LedgerBleBridge.setActivity(this)
     BiometricBridge.registerVmWithRust()
+    // btleplug's droidplug needs to resolve its Java companion classes
+    // once at startup. This passes Kotlin's JNIEnv straight to
+    // btleplug::platform::init on the Rust side.
+    LedgerBleBridge.initBtleplug()
 
     ViewCompat.setOnApplyWindowInsetsListener(window.decorView) { _, insets ->
       val bars = insets.getInsets(
