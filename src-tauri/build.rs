@@ -54,5 +54,11 @@ fn main() {
         cc::Build::new()
             .file("swift-compat-stubs.c")
             .compile("swift_compat_stubs");
+        // btleplug's CoreBluetooth backend (Ledger Nano X / Stax / Flex pair
+        // over BLE) references CoreBluetooth symbols such as
+        // CBAdvertisementDataManufacturerDataKey. A Rust staticlib doesn't carry
+        // its framework deps, so the iOS link fails with "symbol(s) not found"
+        // unless we link CoreBluetooth explicitly here.
+        println!("cargo:rustc-link-lib=framework=CoreBluetooth");
     }
 }
