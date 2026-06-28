@@ -4644,6 +4644,7 @@
       document.getElementById('wallet-info-type').textContent = w.type || 'regular';
       document.getElementById('wallet-info-address').textContent = w.address || '--';
       document.getElementById('wallet-info-scan').innerHTML = w.scanHeight != null ? blockLink(w.scanHeight) : '--';
+      document.getElementById('wallet-info-xpub').textContent = w.xpub || '--';
       walletEncrypted = !!w.encrypted;
       walletUnlocked = !w.encrypted || !!w.unlocked;
       walletIsMultisig = w.type === 'multisig';
@@ -4957,6 +4958,12 @@
       err2.textContent = String((e && e.message) || e);
       statusEl.appendChild(err2);
     }
+  });
+
+  document.getElementById('btn-copy-xpub').addEventListener('click', function() {
+    var xpub = document.getElementById('wallet-info-xpub').textContent;
+    if (!xpub || xpub === '--') return;
+    navigator.clipboard.writeText(xpub).then(function() { showToast('Copied to clipboard'); });
   });
 
   document.getElementById('btn-rescan').addEventListener('click', async () => {
