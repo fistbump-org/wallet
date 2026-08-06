@@ -10,15 +10,19 @@
     <string>Scan a recovery phrase QR code to restore an existing wallet</string>
     <key>NSFaceIDUsageDescription</key>
     <string>Unlock your wallet without typing your passphrase</string>
-    <!-- Answers App Store Connect's export compliance prompt once here rather
-         than per upload. True because the app's encryption falls outside the
-         Category 5 Part 2 exemptions: rustls is a bundled TLS stack rather
-         than the OS's, Brontide encrypts node P2P traffic for confidentiality
-         (not just authentication), and stored secrets are sealed with
-         AES-256-GCM. All of it is standard published crypto in a mass-market
-         app, so it self-classifies as ECCN 5D992.c — which requires an annual
-         self-classification report to BIS/NSA, not a licence. -->
-    <key>ITSAppUsesNonExemptEncryption</key>
-    <true/>
+    <!-- Deliberately no ITSAppUsesNonExemptEncryption key.
+         Setting it true additionally requires ITSEncryptionExportComplianceCode
+         — the code App Store Connect issues once export compliance
+         documentation is on file — and altool rejects the upload with 90592
+         ("export compliance key value []") when the code is missing. Setting
+         it false would be inaccurate: the app's encryption falls outside the
+         Category 5 Part 2 exemptions on three counts (rustls is a bundled TLS
+         stack rather than the OS's, Brontide encrypts node P2P traffic for
+         confidentiality rather than authentication, and stored secrets are
+         sealed with AES-256-GCM).
+         With the key absent, App Store Connect asks at submission instead,
+         where the mass-market self-classification path (ECCN 5D992.c, annual
+         self-classification report to BIS/NSA) can be answered properly. -->
+
   </dict>
 </plist>
