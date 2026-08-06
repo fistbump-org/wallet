@@ -6,6 +6,7 @@
 import { readdirSync, unlinkSync, symlinkSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { execFileSync } from 'node:child_process';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -54,4 +55,35 @@ function pinExternalsBuildPhase(projectYml) {
   console.log('[overlay] pinned Externals to buildPhase: none (keeps libapp.a out of the .app)');
 }
 
+// App Store Connect requires CFBundleVersion — the "Build" number — to
+// increase with every upload within a marketing version. Tauri stamps it from
+// the app version, so every 0.4.1 build was literally "0.4.1" and the second
+// upload of a release was refused as a duplicate; the only escape was bumping
+// the marketing version.
+//
+// The number lives in the tracked ios-build-number file rather than being
+// derived from the commit count, so it can be bumped for a re-upload without
+// inventing a commit. build-all.sh increments it on an iOS release; bump it
+// by hand for a one-off. Falls back to the commit count if the file is
+// missing, which is what earlier releases used (0.2.0 → 43, 0.4.0 → 53).
+function stampBuildNumber(projectYml, numberFile) {
+  if (!existsSync(projectYml)) return;
+  let build = '';
+  if (existsSync(numberFile)) build = readFileSync(numberFile, 'utf8').trim();
+  if (!/^\d+$/.test(build)) {
+    try {
+      build = execFileSync('git', ['rev-list', '--count', 'HEAD'], { cwd: here, encoding: 'utf8' }).trim();
+    } catch {
+      return; // no file, no git — leave whatever Tauri wrote
+    }
+  }
+  if (!/^\d+$/.test(build)) return;
+  const src = readFileSync(projectYml, 'utf8');
+  const next = src.replace(/^(\s*CFBundleVersion:\s*).*$/m, `$1"${build}"`);
+  if (next === src) return;
+  writeFileSync(projectYml, next);
+  console.log(`[overlay] stamped CFBundleVersion ${build}`);
+}
+
 pinExternalsBuildPhase(resolve(here, 'gen/apple/project.yml'));
+stampBuildNumber(resolve(here, 'gen/apple/project.yml'), resolve(here, 'ios-build-number'));
