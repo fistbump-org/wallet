@@ -3,9 +3,10 @@
   "version": "0.4.1",
   "description": "Fistbump wallet and name manager",
   "scripts": {
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "ios:init": "tauri ios init && node src-tauri/sync-mobile-overlay.mjs && cp src-tauri/icons/ios/*.png src-tauri/gen/apple/Assets.xcassets/AppIcon.appiconset/ && cd src-tauri/gen/apple && xcodegen generate"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2"
+    "@tauri-apps/cli": "2.10.1"
   }
 }

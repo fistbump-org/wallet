@@ -1,0 +1,208 @@
+# XcodeGen project template for the iOS target, referenced by
+# bundle.iOS.template in tauri.conf.json.
+#
+# WHY THIS EXISTS: gen/apple/ is generated and gitignored, but the iOS build
+# needs customizations that Tauri's built-in template doesn't produce. Before
+# this file, they lived only in the generated gen/apple/project.yml, and any
+# `tauri ios init` silently wiped them — the next build then died with
+# "unable to resolve module dependency: 'CSHA3' / 'CSecp256k1' / 'CLevelDB'".
+#
+# This is Tauri CLI v2.10.1's stock template (hence the pinned
+# @tauri-apps/cli version in package.json) plus exactly three additions:
+#   1. packages:            the local fbd SPM package + swift-log
+#   2. Externals            pinned to `buildPhase: none` so the ~330MB
+#                           libapp.a staticlib stays a link input and is not
+#                           copied into the .app (it is already linked in)
+#   3. dependencies:        products Node (from fbd) and Logging (swift-log)
+#
+# Everything else stays templated so Tauri keeps filling it in. Two other
+# customizations deliberately live in tauri.conf.json instead, because plain
+# keys cover them: minimumSystemVersion (16.0) and frameworks
+# (CoreBluetooth) — do not hardcode those here or they will be emitted twice.
+#
+# PATH GOTCHA: bundle.iOS.template resolves against the *invocation* CWD, so
+# run inits from the repo root (`npm run ios:init`). Its sibling
+# bundle.iOS.infoPlist resolves against src-tauri/ instead.
+#
+# Never run a bare `tauri ios init` — use `npm run ios:init`, which also
+# relinks the overlay sources and restores the app icons. See that script.
+name: {{app.name}}
+options:
+  bundleIdPrefix: {{app.identifier}}
+  deploymentTarget:
+    iOS: {{apple.ios-version}}
+packages:
+  fbd:
+    path: ../../../../fbd
+  swift-log:
+    url: https://github.com/apple/swift-log.git
+    from: 1.5.0
+fileGroups: [{{join file-groups}}]
+configs:
+  debug: debug
+  release: release
+settingGroups:
+  app:
+    base:
+      PRODUCT_NAME: {{app.stylized-name}}
+      PRODUCT_BUNDLE_IDENTIFIER: {{app.identifier}}
+      {{#if apple.development-team}}
+      DEVELOPMENT_TEAM: {{apple.development-team}}
+      {{/if}}
+targetTemplates:
+  app:
+    type: application
+    sources:
+      - path: Sources
+    scheme:
+      environmentVariables:
+        RUST_BACKTRACE: full
+        RUST_LOG: info
+    settings:
+      groups: [app]
+targets:
+  {{app.name}}_iOS:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+      - path: Assets.xcassets
+      - path: Externals
+        buildPhase: none
+      - path: {{app.name}}_iOS
+      - path: {{app.asset-dir}}
+        buildPhase: resources
+        type: folder
+      {{~#each asset-catalogs}}
+      - {{prefix-path this}}{{/each}}
+      {{~#each ios-additional-targets}}
+      - path: {{prefix-path this}}{{/each}}
+      - path: LaunchScreen.storyboard
+    info:
+      path: {{app.name}}_iOS/Info.plist
+      properties:
+        LSRequiresIPhoneOS: true
+        UILaunchStoryboardName: LaunchScreen
+        UIRequiredDeviceCapabilities: [arm64, metal]
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        CFBundleShortVersionString: {{apple.bundle-version-short}}
+        CFBundleVersion: "{{apple.bundle-version}}"
+        {{~#each apple.plist-pairs}}
+        {{this.key}}: {{this.value}}{{/each}}
+    entitlements:
+      path: {{app.name}}_iOS/{{app.name}}_iOS.entitlements
+    scheme:
+      environmentVariables:
+        RUST_BACKTRACE: full
+        RUST_LOG: info
+      {{~#if ios-command-line-arguments}}
+      commandLineArguments:
+      {{~#each ios-command-line-arguments}}
+        "{{this}}": true
+      {{/each}}{{~/if}}
+    settings:
+      base:
+        ENABLE_BITCODE: false
+        ARCHS: [{{join ios-valid-archs}}]
+        VALID_ARCHS: {{~#each ios-valid-archs}} {{this}} {{/each}}
+        LIBRARY_SEARCH_PATHS[arch=x86_64]: $(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME) $(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)
+        LIBRARY_SEARCH_PATHS[arch=arm64]: $(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME) $(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)
+        ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES: true
+        EXCLUDED_ARCHS[sdk=iphoneos*]: x86_64
+      groups: [app]
+    dependencies:
+      - framework: {{ lib-output-file-name }}
+        embed: false
+      {{~#each ios-libraries}}
+      - framework: {{this}}
+        embed: false{{/each}}{{#if ios-vendor-frameworks}}{{~#each ios-vendor-frameworks}}
+      - framework: {{this}}{{/each}}{{/if}}{{#if ios-vendor-sdks}}{{~#each ios-vendor-sdks}}
+      - sdk: {{prefix-path this}}{{/each}}{{/if}}
+      - sdk: CoreGraphics.framework
+      - sdk: Metal.framework
+      - sdk: MetalKit.framework
+      - sdk: QuartzCore.framework
+      - sdk: Security.framework
+      - sdk: UIKit.framework{{#if this.ios-frameworks}}{{~#each ios-frameworks}}
+      - sdk: {{this}}.framework{{/each}}{{/if}}
+      - sdk: WebKit.framework
+      - package: fbd
+        product: Node
+      - package: swift-log
+        product: Logging
+    preBuildScripts:
+      {{~#each ios-pre-build-scripts}}{{#if this.path}}
+      - path {{this.path}}{{/if}}{{#if this.script}}
+      - script: {{this.script}}{{/if}}{{#if this.name}}
+        name: {{this.name}}{{/if}}{{#if this.input-files}}
+        inputFiles: {{~#each this.input-files}}
+          - {{this}}{{/each}}{{/if}}{{#if this.output-files}}
+        outputFiles: {{~#each this.output-files}}
+          - {{this}}{{/each}}{{/if}}{{#if this.input-file-lists}}
+        inputFileLists: {{~#each this.output-files}}
+          - {{this}}{{/each}}{{/if}}{{#if this.output-file-lists}}
+        outputFileLists: {{~#each this.output-files}}
+          - {{this}}{{/each}}{{/if}}{{#if this.shell}}
+        shell: {{this.shell}}{{/if}}{{#if this.show-env-vars}}
+        showEnvVars: {{this.show_env_vars}}{{/if}}{{#if this.run-only-when-installing}}
+        runOnlyWhenInstalling: {{this.run-only-when-installing}}{{/if}}{{#if this.based-on-dependency-analysis}}
+        basedOnDependencyAnalysis: {{this.based-on-dependency-analysis}}{{/if}}{{#if this.discovered-dependency-file}}
+        discoveredDependencyFile: {{this.discovered-dependency-file}}{{/if}}
+      {{~/each}}
+
+      - script: {{ tauri-binary }} {{ tauri-binary-args-str }} -v --platform ${PLATFORM_DISPLAY_NAME:?} --sdk-root ${SDKROOT:?} --framework-search-paths "${FRAMEWORK_SEARCH_PATHS:?}" --header-search-paths "${HEADER_SEARCH_PATHS:?}" --gcc-preprocessor-definitions "${GCC_PREPROCESSOR_DEFINITIONS:-}" --configuration ${CONFIGURATION:?} ${FORCE_COLOR} ${ARCHS:?}
+        name: Build Rust Code
+        basedOnDependencyAnalysis: false
+        outputFiles:
+          - $(SRCROOT)/Externals/x86_64/${CONFIGURATION}/{{ lib-output-file-name }}
+          - $(SRCROOT)/Externals/arm64/${CONFIGURATION}/{{ lib-output-file-name }}
+    {{~#if ios-post-compile-scripts}}
+    postCompileScripts:
+      {{~#each ios-post-compile-scripts}}{{#if this.path}}
+      - path {{this.path}}{{/if}}{{#if this.script}}
+      - script: {{this.script}}{{/if}}{{#if this.name}}
+        name: {{this.name}}{{/if}}{{#if this.input-files}}
+        inputFiles: {{~#each this.input-files}}
+          - {{this}}{{/each}}{{/if}}{{#if this.output-files}}
+        outputFiles: {{~#each this.output-files}}
+          - {{this}}{{/each}}{{/if}}{{#if this.input-file-lists}}
+        inputFileLists: {{~#each this.output-files}}
+          - {{this}}{{/each}}{{/if}}{{#if this.output-file-lists}}
+        outputFileLists: {{~#each this.output-files}}
+          - {{this}}{{/each}}{{/if}}{{#if this.shell}}
+        shell: {{this.shell}}{{/if}}{{#if this.show-env-vars}}
+        showEnvVars: {{this.show_env_vars}}{{/if}}{{#if this.run-only-when-installing}}
+        runOnlyWhenInstalling: {{this.run-only-when-installing}}{{/if}}{{#if this.based-on-dependency-analysis}}
+        basedOnDependencyAnalysis: {{this.based-on-dependency-analysis}}{{/if}}{{#if this.discovered-dependency-file}}
+        discoveredDependencyFile: {{this.discovered-dependency-file}}{{/if}}
+      {{~/each~}}
+    {{~/if~}}
+    {{~#if ios-post-build-scripts}}
+    postBuildScripts:
+      {{~#each ios-post-build-scripts}}{{#if this.path}}
+      - path {{this.path}}{{/if}}{{#if this.script}}
+      - script: {{this.script}}{{/if}}{{#if this.name}}
+        name: {{this.name}}{{/if}}{{#if this.input-files}}
+        inputFiles: {{~#each this.input-files}}
+          - {{this}}{{/each}}{{/if}}{{#if this.output-files}}
+        outputFiles: {{~#each this.output-files}}
+          - {{this}}{{/each}}{{/if}}{{#if this.input-file-lists}}
+        inputFileLists: {{~#each this.output-files}}
+          - {{this}}{{/each}}{{/if}}{{#if this.output-file-lists}}
+        outputFileLists: {{~#each this.output-files}}
+          - {{this}}{{/each}}{{/if}}{{#if this.shell}}
+        shell: {{this.shell}}{{/if}}{{#if this.show-env-vars}}
+        showEnvVars: {{this.show_env_vars}}{{/if}}{{#if this.run-only-when-installing}}
+        runOnlyWhenInstalling: {{this.run-only-when-installing}}{{/if}}{{#if this.based-on-dependency-analysis}}
+        basedOnDependencyAnalysis: {{this.based-on-dependency-analysis}}{{/if}}{{#if this.discovered-dependency-file}}
+        discoveredDependencyFile: {{this.discovered-dependency-file}}{{/if}}
+      {{~/each~}}
+    {{~/if}}

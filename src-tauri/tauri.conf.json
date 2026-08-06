@@ -44,7 +44,10 @@
     },
     "iOS": {
       "developmentTeam": "5JAGPKCDD7",
-      "bundleVersion": "62"
+      "bundleVersion": "62",
+      "minimumSystemVersion": "16.0",
+      "frameworks": ["CoreBluetooth"],
+      "template": "src-tauri/ios-project.yml.hbs"
     },
     "macOS": {
       "entitlements": "Entitlements.plist"
