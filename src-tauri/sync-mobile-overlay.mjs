@@ -39,10 +39,12 @@ for (const { src, dst } of overlays) {
 // `- path: Externals` copies 300+ MB of already-linked object code into the
 // .app, on top of linking it. That inflates the IPA roughly tenfold and can
 // draw an App Store rejection for shipping a .a inside the bundle.
+// `buildPhase: none` keeps Externals as a link input only.
 //
-// `buildPhase: none` keeps Externals as a link input only. gen/apple is
-// gitignored and `tauri ios init` recreates project.yml from scratch, so the
-// setting has to be re-applied on every build rather than fixed once by hand.
+// `tauri ios build` does NOT run XcodeGen — only `tauri ios init` does — so
+// editing project.yml alone never reaches the .xcodeproj that actually gets
+// built. Re-run XcodeGen ourselves when the pin was missing, which is exactly
+// the case after an init has recreated project.yml from Tauri's template.
 function pinExternalsBuildPhase(projectYml) {
   if (!existsSync(projectYml)) return;
   const lines = readFileSync(projectYml, 'utf8').split('\n');
@@ -53,37 +55,18 @@ function pinExternalsBuildPhase(projectYml) {
   lines.splice(i + 1, 0, `${indent}buildPhase: none`);
   writeFileSync(projectYml, lines.join('\n'));
   console.log('[overlay] pinned Externals to buildPhase: none (keeps libapp.a out of the .app)');
+  try {
+    execFileSync('xcodegen', ['generate', '--quiet'], { cwd: dirname(projectYml), stdio: 'inherit' });
+    console.log('[overlay] regenerated the Xcode project so the pin takes effect');
+  } catch {
+    console.warn('[overlay] WARNING: xcodegen not available — run it in gen/apple or libapp.a will ship inside the .app');
+  }
 }
 
-// App Store Connect requires CFBundleVersion — the "Build" number — to
-// increase with every upload within a marketing version. Tauri stamps it from
-// the app version, so every 0.4.1 build was literally "0.4.1" and the second
-// upload of a release was refused as a duplicate; the only escape was bumping
-// the marketing version.
-//
-// The number lives in the tracked ios-build-number file rather than being
-// derived from the commit count, so it can be bumped for a re-upload without
-// inventing a commit. build-all.sh increments it on an iOS release; bump it
-// by hand for a one-off. Falls back to the commit count if the file is
-// missing, which is what earlier releases used (0.2.0 → 43, 0.4.0 → 53).
-function stampBuildNumber(projectYml, numberFile) {
-  if (!existsSync(projectYml)) return;
-  let build = '';
-  if (existsSync(numberFile)) build = readFileSync(numberFile, 'utf8').trim();
-  if (!/^\d+$/.test(build)) {
-    try {
-      build = execFileSync('git', ['rev-list', '--count', 'HEAD'], { cwd: here, encoding: 'utf8' }).trim();
-    } catch {
-      return; // no file, no git — leave whatever Tauri wrote
-    }
-  }
-  if (!/^\d+$/.test(build)) return;
-  const src = readFileSync(projectYml, 'utf8');
-  const next = src.replace(/^(\s*CFBundleVersion:\s*).*$/m, `$1"${build}"`);
-  if (next === src) return;
-  writeFileSync(projectYml, next);
-  console.log(`[overlay] stamped CFBundleVersion ${build}`);
-}
+// NOTE: the App Store build number (CFBundleVersion) is NOT set here.
+// cargo-mobile2 runs `agvtool new-version -all <v>` after the build and before
+// archiving, making it the last writer to Info.plist — so anything stamped
+// earlier is overwritten. The value it uses comes from bundle.iOS.bundleVersion
+// in tauri.conf.json, which is therefore the only place that works.
 
 pinExternalsBuildPhase(resolve(here, 'gen/apple/project.yml'));
-stampBuildNumber(resolve(here, 'gen/apple/project.yml'), resolve(here, 'ios-build-number'));

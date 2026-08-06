@@ -43,7 +43,8 @@
       "resources/fistbump-bridge": "fistbump-bridge"
     },
     "iOS": {
-      "developmentTeam": "5JAGPKCDD7"
+      "developmentTeam": "5JAGPKCDD7",
+      "bundleVersion": "61"
     },
     "macOS": {
       "entitlements": "Entitlements.plist"
