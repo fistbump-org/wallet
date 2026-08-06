@@ -44,7 +44,7 @@
     },
     "iOS": {
       "developmentTeam": "5JAGPKCDD7",
-      "bundleVersion": "61"
+      "bundleVersion": "62"
     },
     "macOS": {
       "entitlements": "Entitlements.plist"
