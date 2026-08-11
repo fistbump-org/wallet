@@ -34,6 +34,24 @@ for (const { src, dst } of overlays) {
   if (existsSync(src) && existsSync(dst)) walk(src, dst);
 }
 
+// App icons live under gen/, which `tauri android|ios init` recreates from
+// Tauri's own templates — so an init silently replaces them with the Tauri
+// logo. That is exactly what happened to Android: gen/android's icons date
+// from an init on 2026-06-28, 0.4.0 shipped before it, and 0.4.1 was the
+// first release to go out wearing the default mark.
+//
+// The real icons are tracked under icons/, so mirror them in on every build
+// the same way the native overlays are mirrored. Android also needs
+// mipmap-anydpi-v26/ic_launcher.xml, the adaptive-icon definition that
+// Tauri's template does not emit.
+const icons = [
+  { src: resolve(here, 'icons/android'), dst: resolve(here, 'gen/android/app/src/main/res') },
+  { src: resolve(here, 'icons/ios'),     dst: resolve(here, 'gen/apple/Assets.xcassets/AppIcon.appiconset') },
+];
+for (const { src, dst } of icons) {
+  if (existsSync(src) && existsSync(dst)) walk(src, dst);
+}
+
 // XcodeGen assigns any source file it can't compile to the Resources build
 // phase. `Externals/` holds libapp.a — the Rust staticlib — so a bare
 // `- path: Externals` copies 300+ MB of already-linked object code into the
